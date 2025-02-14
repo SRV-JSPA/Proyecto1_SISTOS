@@ -3,12 +3,7 @@
         {
             "name": "Mac",
             "includePath": [
-                "${workspaceFolder}/**",
-                "/usr/local/include",
-                "/usr/local/opt/qt5/include",
-                "/usr/local/Cellar/qt@5/5.15.2/include",
-                "/opt/homebrew/include",
-                "/opt/homebrew/Cellar/qt@5/5.15.2/include"
+                "${workspaceFolder}/**"
             ],
             "defines": [],
             "macFrameworkPath": [
