@@ -3,13 +3,13 @@
         {
             "name": "Mac",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+                "/opt/homebrew/opt/qt@5/include",
+                "/opt/homebrew/Cellar/qt@5/5.15.16/include",
+                "/usr/local/include"
             ],
-            "defines": [],
-            "macFrameworkPath": [
-                "/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/System/Library/Frameworks"
-            ],
-            "cStandard": "c17",
+            "compilerPath": "/usr/bin/clang++",
+            "cStandard": "c11",
             "cppStandard": "c++17",
             "intelliSenseMode": "macos-clang-arm64"
         }
