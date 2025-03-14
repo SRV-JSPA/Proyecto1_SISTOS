@@ -106,7 +106,7 @@ public:
 int main() {
     try {
         net::io_context ioc;
-        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 3000));
+        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 3000, true));
         ChatServer servidor;
         
         while (true) {
