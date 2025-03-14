@@ -311,13 +311,13 @@ void MyFrame::OnSend(wxCommandEvent&) {
     try {
         net::io_context ioc;
         tcp::resolver resolver(ioc);
-        auto const results = resolver.resolve("127.0.0.1", "3000");
+        auto const results = resolver.resolve("3.13.27.172", "3000");
 
         tcp::socket socket(ioc);
         net::connect(socket, results.begin(), results.end());
 
         auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
-        std::string url = "ws://127.0.0.1:3000?name=" + usuario;
+        std::string url = "ws://3.13.27.172:3000?name=" + usuario;
         ws->handshake(url, "/");
 
         ChatFrame* chatFrame = new ChatFrame(ws, usuario);
