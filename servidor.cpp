@@ -106,7 +106,9 @@ public:
 int main() {
     try {
         net::io_context ioc;
-        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 3000, true));
+        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 3000));
+        acceptor.set_option(boost::asio::socket_base::reuse_address(true));
+
         ChatServer servidor;
         
         while (true) {
