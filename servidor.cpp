@@ -6,106 +6,119 @@
 #include <mutex>
 #include <memory>
 #include <vector>
+#include <deque>
+#include <regex>
 
 namespace beast = boost::beast;
+namespace http = beast::http;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
+struct Mensaje {
+    std::string origen;
+    std::string destino;
+    std::string contenido;
+    Mensaje(std::string org, std::string dest, std::string cont)
+        : origen(std::move(org)), destino(std::move(dest)), contenido(std::move(cont)) {}
+};
+
+enum class EstadoUsuario : uint8_t {
+    DESCONECTADO = 0,
+    ACTIVO = 1,
+    OCUPADO = 2,
+    INACTIVO = 3
+};
+
 class Usuario {
 public:
     std::string nombre;
-    std::string ip;
-    std::string estatus;
+    EstadoUsuario estado;
+    std::shared_ptr<websocket::stream<tcp::socket>> ws_stream;
+    std::deque<Mensaje> historial_mensajes;
 
-    Usuario(std::string nombre, std::string ip)
-        : nombre(std::move(nombre)), ip(std::move(ip)), estatus("conectado") {}
+    Usuario(std::string nombre, std::shared_ptr<websocket::stream<tcp::socket>> ws)
+        : nombre(std::move(nombre)), estado(EstadoUsuario::ACTIVO), ws_stream(ws) {}
 
-    void cambiar_estatus(const std::string& nuevo_estatus) {
-        estatus = nuevo_estatus;
+    void cambiar_estado(EstadoUsuario nuevo_estado) {
+        estado = nuevo_estado;
     }
 
-    std::string obtener_estatus() const {
-        return estatus;
+    bool esta_activo() const {
+        return estado == EstadoUsuario::ACTIVO;
     }
 
-    std::string obtener_ip() const {
-        return ip;
+    void agregar_mensaje(const Mensaje& msg) {
+        historial_mensajes.push_back(msg);
+        if (historial_mensajes.size() > 100) {
+            historial_mensajes.pop_front();
+        }
     }
-    
 };
 
-std::unordered_map<std::string, std::shared_ptr<Usuario>> user_sessions;
-std::mutex session_mutex;
+class ChatServer {
+private:
+    std::unordered_map<std::string, std::shared_ptr<Usuario>> usuarios;
+    std::mutex usuarios_mutex;
 
-void handle_session(tcp::socket socket) {
-    try {
-        std::string cliente_ip = socket.remote_endpoint().address().to_string();
-        websocket::stream<tcp::socket> ws(std::move(socket));
-        ws.accept();
-
-        beast::flat_buffer buffer;
-        ws.read(buffer);
-
-        std::vector<uint8_t> received_msg(buffer.size());
-        boost::asio::buffer_copy(boost::asio::buffer(received_msg), buffer.data());
-
-        if (received_msg.size() < 3 || received_msg[0] != 53) {
-            ws.write(net::buffer(std::string("Error: Formato de registro inválido")));
-            return;
+    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
+        std::lock_guard<std::mutex> lock(usuarios_mutex);
+        for (auto& [nombre, usuario] : usuarios) {
+            if (usuario->esta_activo()) {
+                try {
+                    usuario->ws_stream->write(net::buffer(mensaje));
+                } catch (...) {}
+            }
         }
+    }
 
-        uint8_t usuario_length = received_msg[1];
-        std::string usuario(received_msg.begin() + 2, received_msg.begin() + 2 + usuario_length);
+    void cambiar_estado_usuario(const std::string& nombre, EstadoUsuario nuevo_estado) {
+        std::lock_guard<std::mutex> lock(usuarios_mutex);
+        auto it = usuarios.find(nombre);
+        if (it != usuarios.end()) {
+            it->second->cambiar_estado(nuevo_estado);
+        }
+    }
 
-        {
-            std::lock_guard<std::mutex> lock(session_mutex);
-            if (user_sessions.find(usuario) != user_sessions.end()) {
-                ws.write(net::buffer(std::string("Error: Usuario ya registrado")));
-                return;
+public:
+    void manejar_conexion(tcp::socket& socket) {
+        try {
+            auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
+            ws->accept();
+            std::string nombre_usuario = "user"; 
+
+            {
+                std::lock_guard<std::mutex> lock(usuarios_mutex);
+                if (usuarios.find(nombre_usuario) != usuarios.end()) {
+                    return;
+                }
+                usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws);
             }
 
-            user_sessions[usuario] = std::make_shared<Usuario>(usuario, cliente_ip);
-        }
-
-        std::cout << "Nuevo usuario registrado: " << usuario << " | IP: " << cliente_ip << "\n";
-        ws.write(net::buffer("Registro exitoso: " + usuario));
-
-        while (true) {
-            buffer.clear();
-            ws.read(buffer);
-            std::string msg = beast::buffers_to_string(buffer.data());
-
-            std::cout << "Mensaje recibido de " << usuario << ": " << msg << std::endl;
-            ws.write(net::buffer("Echo: " + msg));
-        }
-
-    } catch (const beast::system_error& se) {
-        if (se.code() == websocket::error::closed) {
-            std::cout << "Usuario desconectado." << std::endl;
-        } else {
-            std::cerr << "Error en sesión WebSocket: " << se.what() << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Error en sesión WebSocket: " << e.what() << std::endl;
+            std::vector<uint8_t> mensaje_nuevo = {53, static_cast<uint8_t>(nombre_usuario.size())};
+            mensaje_nuevo.insert(mensaje_nuevo.end(), nombre_usuario.begin(), nombre_usuario.end());
+            mensaje_nuevo.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
+            broadcast_mensaje(mensaje_nuevo);
+        } catch (...) {}
     }
-}
+};
 
 int main() {
     try {
         net::io_context ioc;
-        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 9000));
-
-        std::cout << "Servidor WebSocket en el puerto 9000...\n";
-
+        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), 3000));
+        ChatServer servidor;
+        
         while (true) {
             tcp::socket socket(ioc);
             acceptor.accept(socket);
-            std::thread(&handle_session, std::move(socket)).detach();
+            std::thread([&servidor](tcp::socket sock) {
+                servidor.manejar_conexion(sock);
+            }, std::move(socket)).detach();
         }
     } catch (const std::exception& e) {
         std::cerr << "Error en el servidor: " << e.what() << std::endl;
+        return 1;
     }
-
     return 0;
 }
