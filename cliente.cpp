@@ -12,10 +12,8 @@ namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-
 class ChatFrame;
 class MyFrame;
-
 
 enum class EstadoUsuario : uint8_t {
     DESCONECTADO = 0,
@@ -50,31 +48,6 @@ private:
     void StartReceivingMessages();
     void OnAddContact(wxCommandEvent&);
     void OnSelectContact(wxCommandEvent& evt);
-
-private:
-    wxButton* checkUserInfoButton;  
-    
-    void OnCheckUserInfo(wxCommandEvent&) {
-        if (contactList->GetSelection() == wxNOT_FOUND) {
-            wxMessageBox("Seleccione un usuario primero", "Aviso", wxOK | wxICON_INFORMATION);
-            return;
-        }
-
-        std::string selectedUser = contactList->GetString(contactList->GetSelection()).ToStdString();
-        
-        try {
-            std::vector<uint8_t> data;
-            data.push_back(4); 
-            
-            data.push_back(static_cast<uint8_t>(selectedUser.length()));
-            data.insert(data.end(), selectedUser.begin(), selectedUser.end());
-            
-            ws_->write(net::buffer(data));
-        } catch (const std::exception& e) {
-            wxMessageBox("Error al solicitar información: " + std::string(e.what()),
-                        "Error", wxOK | wxICON_ERROR);
-        }
-    }
 };
 
 ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario)
@@ -90,9 +63,6 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     wxButton* addContactButton = new wxButton(panel, wxID_ANY, "Agregar Contacto");
     leftSizer->Add(addContactButton, 0, wxALL | wxEXPAND, 5);
 
-    checkUserInfoButton = new wxButton(panel, wxID_ANY, "Ver Info Usuario");
-    leftSizer->Add(checkUserInfoButton, 0, wxALL | wxEXPAND, 5);
-
     wxBoxSizer* rightSizer = new wxBoxSizer(wxVERTICAL);
     chatBox = new wxTextCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY);
     rightSizer->Add(chatBox, 1, wxALL | wxEXPAND, 5);
@@ -106,8 +76,6 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     mainSizer->Add(leftSizer, 1, wxEXPAND);
     mainSizer->Add(rightSizer, 2, wxEXPAND);
 
-    checkUserInfoButton->Bind(wxEVT_BUTTON, &ChatFrame::OnCheckUserInfo, this);
-
     panel->SetSizer(mainSizer);
 
     sendButton->Bind(wxEVT_BUTTON, &ChatFrame::OnSend, this);
@@ -116,29 +84,6 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     contactList->Bind(wxEVT_LISTBOX, &ChatFrame::OnSelectContact, this);
 
     StartReceivingMessages();
-    AskForChatPartner();
-}
-
-void ChatFrame::AskForChatPartner() {
-    try {
-        beast::flat_buffer buffer;
-        std::vector<uint8_t> request = {1};
-        ws_->write(net::buffer(request));
-    } catch (const std::exception& e) {
-        wxMessageBox("Error al solicitar la lista de contactos: " + std::string(e.what()),
-                    "Error", wxOK | wxICON_ERROR);
-    }
-}
-
-void ChatFrame::LoadChatHistory() {
-    if (chatPartner_.empty()) return;
-    
-    chatBox->Clear();
-    if (chatHistory_.find(chatPartner_) != chatHistory_.end()) {
-        for (const auto& message : chatHistory_[chatPartner_]) {
-            chatBox->AppendText(message + "\n");
-        }
-    }
 }
 
 void ChatFrame::OnSend(wxCommandEvent&) {
@@ -151,29 +96,14 @@ void ChatFrame::OnSend(wxCommandEvent&) {
     if (message.empty()) return;
 
     try {
-        std::vector<uint8_t> data;
-        data.push_back(2); 
-        
-        data.push_back(static_cast<uint8_t>(usuario_.length()));
-        data.insert(data.end(), usuario_.begin(), usuario_.end());
-        
-        data.push_back(static_cast<uint8_t>(chatPartner_.length()));
-        data.insert(data.end(), chatPartner_.begin(), chatPartner_.end());
-        
-        uint16_t msgLen = static_cast<uint16_t>(message.length());
-        data.push_back(static_cast<uint8_t>(msgLen >> 8));
-        data.push_back(static_cast<uint8_t>(msgLen & 0xFF));
-        data.insert(data.end(), message.begin(), message.end());
+        std::string formatted_message = chatPartner_ + ":" + message;
+        ws_->write(net::buffer(formatted_message));
 
-        ws_->write(net::buffer(data));
-
-        std::string formatted_message = usuario_ + ": " + message;
-        chatHistory_[chatPartner_].push_back(formatted_message);
-        chatBox->AppendText(formatted_message + "\n");
+        chatHistory_[chatPartner_].push_back(usuario_ + ": " + message);
+        chatBox->AppendText(usuario_ + ": " + message + "\n");
         messageInput->Clear();
     } catch (const std::exception& e) {
-        wxMessageBox("Error al enviar mensaje: " + std::string(e.what()),
-                    "Error", wxOK | wxICON_ERROR);
+        wxMessageBox("Error al enviar mensaje: " + std::string(e.what()), "Error", wxOK | wxICON_ERROR);
     }
 }
 
@@ -183,98 +113,19 @@ void ChatFrame::StartReceivingMessages() {
             while (true) {
                 beast::flat_buffer buffer;
                 ws_->read(buffer);
-                
-                std::string data(static_cast<char*>(buffer.data().data()), buffer.data().size());
-                
-                if (!data.empty()) {
-                    uint8_t code = data[0];
-                    
-                    switch (code) {
-                        case 53: { 
-                            uint8_t nameLen = data[1];
-                            std::string name = data.substr(2, nameLen);
-                            EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + nameLen]);
-                            
-                            wxGetApp().CallAfter([this, name]() {
-                                if (contactList->FindString(name) == wxNOT_FOUND) {
-                                    contactList->Append(name);
-                                }
-                            });
-                            break;
-                        }
-                        case 2: { 
-                            uint8_t originLen = data[1];
-                            std::string origin = data.substr(2, originLen);
-                            
-                            uint8_t destLen = data[2 + originLen];
-                            std::string dest = data.substr(3 + originLen, destLen);
-                            
-                            uint16_t msgLen = (static_cast<uint16_t>(data[3 + originLen + destLen]) << 8) |
-                                             static_cast<uint16_t>(data[4 + originLen + destLen]);
-                            std::string message = data.substr(5 + originLen + destLen, msgLen);
-                            
-                            if (dest == usuario_ || origin == chatPartner_) {
-                                std::string formatted_message = origin + ": " + message;
-                                chatHistory_[origin].push_back(formatted_message);
-                                
-                                wxGetApp().CallAfter([this, formatted_message]() {
-                                    chatBox->AppendText(formatted_message + "\n");
-                                });
-                            }
-                            break;
-                        }
-                        case 5: { 
-                            uint8_t nameLen = data[1];
-                            std::string name = data.substr(2, nameLen);
-                            EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + nameLen]);
-                            
-                            wxGetApp().CallAfter([this, name, status]() {
-                                std::string statusStr;
-                                switch (status) {
-                                    case EstadoUsuario::ACTIVO: statusStr = "Activo"; break;
-                                    case EstadoUsuario::OCUPADO: statusStr = "Ocupado"; break;
-                                    case EstadoUsuario::INACTIVO: statusStr = "Inactivo"; break;
-                                    case EstadoUsuario::DESCONECTADO: statusStr = "Desconectado"; break;
-                                }
-                                
-                                wxString info = wxString::Format(
-                                    "Información del usuario %s:\n"
-                                    "Estado: %s",
-                                    name, statusStr
-                                );
-                                
-                                wxMessageBox(info, "Información de Usuario", wxOK | wxICON_INFORMATION);
-                            });
-                            break;
-                        }
-                    }
-                }
+                std::string received_message = beast::buffers_to_string(buffer.data());
+
+                wxGetApp().CallAfter([this, received_message]() {
+                    chatBox->AppendText(received_message + "\n");
+                });
             }
         } catch (const std::exception& e) {
             wxGetApp().CallAfter([this, e]() {
-                wxMessageBox("Error en la conexión: " + std::string(e.what()),
-                            "Error", wxOK | wxICON_ERROR);
+                wxMessageBox("Error en la conexión: " + std::string(e.what()), "Error", wxOK | wxICON_ERROR);
                 Close();
             });
         }
     }).detach();
-}
-
-void ChatFrame::OnAddContact(wxCommandEvent&) {
-    wxTextEntryDialog dialog(this, "Ingrese el nombre del contacto:",
-                           "Agregar Contacto", "");
-    
-    if (dialog.ShowModal() == wxID_OK) {
-        std::string contactName = dialog.GetValue().ToStdString();
-        if (!contactName.empty()) {
-            contactList->Append(contactName);
-        }
-    }
-}
-
-void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
-    chatPartner_ = contactList->GetString(evt.GetSelection()).ToStdString();
-    LoadChatHistory();
 }
 
 class MyFrame : public wxFrame {
@@ -317,8 +168,9 @@ void MyFrame::OnSend(wxCommandEvent&) {
         net::connect(socket, results.begin(), results.end());
 
         auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
-        std::string url = "ws://3.13.27.172:3000?name=" + usuario;
-        ws->handshake(url, "/");
+        ws->handshake("ws://3.13.27.172:3000", "/");
+
+        ws->write(net::buffer(usuario));
 
         ChatFrame* chatFrame = new ChatFrame(ws, usuario);
         chatFrame->Show(true);
@@ -326,7 +178,7 @@ void MyFrame::OnSend(wxCommandEvent&) {
     } catch (const std::exception& e) {
         wxMessageBox("Error: " + std::string(e.what()), "Error de conexión", wxOK | wxICON_ERROR);
     }
-}   
+}
 
 bool MyApp::OnInit() {
     MyFrame* frame = new MyFrame();
