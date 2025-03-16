@@ -780,15 +780,19 @@ private:
                 net::io_context ioc;
                 tcp::resolver resolver(ioc);
                 auto const results = resolver.resolve(ip, puerto);
-
+    
                 tcp::socket socket(ioc);
                 net::connect(socket, results.begin(), results.end());
-
+    
                 auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
 
-                std::string url = "/?name=" + usuario;
-                ws->handshake(ip + ":" + puerto, url);
+                ws->set_option(websocket::stream_base::timeout::suggested(
+                    beast::role_type::client));
 
+                ws->handshake(ip, "/?name=" + usuario);
+                
+                std::cout << "Handshake completado con éxito" << std::endl;
+    
                 wxGetApp().CallAfter([this, ws, usuario]() {
                     ChatFrame* chatFrame = new ChatFrame(ws, usuario);
                     chatFrame->Show(true);
