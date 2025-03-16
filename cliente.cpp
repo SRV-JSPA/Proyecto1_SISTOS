@@ -1,21 +1,42 @@
 #include <wx/wx.h>
 #include <wx/listbox.h>
+#include <wx/stattext.h>
+#include <wx/choice.h>
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <iostream>
 #include <vector>
 #include <thread>
 #include <unordered_map>
+#include <mutex>
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
+enum MessageType : uint8_t {
+    CLIENT_LIST_USERS = 1,
+    CLIENT_GET_USER = 2,
+    CLIENT_CHANGE_STATUS = 3,
+    CLIENT_SEND_MESSAGE = 4,
+    CLIENT_GET_HISTORY = 5,
 
-class ChatFrame;
-class MyFrame;
+    SERVER_ERROR = 50,
+    SERVER_LIST_USERS = 51,
+    SERVER_USER_INFO = 52,
+    SERVER_NEW_USER = 53,
+    SERVER_STATUS_CHANGE = 54,
+    SERVER_MESSAGE = 55,
+    SERVER_HISTORY = 56
+};
 
+enum ErrorCode : uint8_t {
+    ERROR_USER_NOT_FOUND = 1,
+    ERROR_INVALID_STATUS = 2,
+    ERROR_EMPTY_MESSAGE = 3,
+    ERROR_DISCONNECTED_USER = 4
+};
 
 enum class EstadoUsuario : uint8_t {
     DESCONECTADO = 0,
@@ -24,6 +45,30 @@ enum class EstadoUsuario : uint8_t {
     INACTIVO = 3
 };
 
+class ContactInfo {
+public:
+    std::string nombre;
+    EstadoUsuario estado;
+
+    ContactInfo() : nombre(""), estado(EstadoUsuario::DESCONECTADO) {}
+    
+    ContactInfo(std::string n, EstadoUsuario e) : nombre(std::move(n)), estado(e) {}
+    
+    wxString FormatName() const {
+        std::string statusIndicator;
+        switch (estado) {
+            case EstadoUsuario::ACTIVO: statusIndicator = "[A] "; break;
+            case EstadoUsuario::OCUPADO: statusIndicator = "[O] "; break;
+            case EstadoUsuario::INACTIVO: statusIndicator = "[I] "; break;
+            case EstadoUsuario::DESCONECTADO: statusIndicator = "[D] "; break;
+        }
+        return wxString(statusIndicator + nombre);
+    }
+};
+
+class ChatFrame;
+class MyFrame;
+
 class MyApp : public wxApp {
 public:
     virtual bool OnInit() override;
@@ -31,101 +76,164 @@ public:
 
 wxIMPLEMENT_APP(MyApp);
 
+
+enum {
+    ID_CHAT_TITLE = wxID_HIGHEST + 1
+};
+
 class ChatFrame : public wxFrame {
 public:
     ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario);
+    ~ChatFrame();
 
 private:
     wxListBox* contactList;
     wxTextCtrl* chatBox;
     wxTextCtrl* messageInput;
+    wxButton* sendButton;
+    wxButton* addContactButton;
+    wxButton* checkUserInfoButton;
+    wxButton* refreshUsersButton;
+    wxChoice* statusChoice;
+    wxStaticText* chatTitle;
+    
     std::shared_ptr<websocket::stream<tcp::socket>> ws_;
     std::string usuario_;
     std::string chatPartner_;
-    std::unordered_map<std::string, std::vector<std::string>> chatHistory_;
+    bool running_;
+    std::mutex chatHistoryMutex_;
 
-    void AskForChatPartner();
+    std::unordered_map<std::string, ContactInfo> contacts_;
+    std::unordered_map<std::string, std::vector<std::string>> chatHistory_;
+    
+    void RequestUserList();
     void LoadChatHistory();
+    void RequestChatHistory();
     void OnSend(wxCommandEvent&);
     void StartReceivingMessages();
     void OnAddContact(wxCommandEvent&);
     void OnSelectContact(wxCommandEvent& evt);
+    void OnCheckUserInfo(wxCommandEvent&);
+    void OnRefreshUsers(wxCommandEvent&);
+    void OnChangeStatus(wxCommandEvent&);
 
-private:
-    wxButton* checkUserInfoButton;  
-    
-    void OnCheckUserInfo(wxCommandEvent&) {
-        if (contactList->GetSelection() == wxNOT_FOUND) {
-            wxMessageBox("Seleccione un usuario primero", "Aviso", wxOK | wxICON_INFORMATION);
-            return;
-        }
+    std::vector<uint8_t> CreateListUsersMessage();
+    std::vector<uint8_t> CreateGetUserMessage(const std::string& username);
+    std::vector<uint8_t> CreateChangeStatusMessage(EstadoUsuario status);
+    std::vector<uint8_t> CreateSendMessageMessage(const std::string& dest, const std::string& message);
+    std::vector<uint8_t> CreateGetHistoryMessage(const std::string& chat);
 
-        std::string selectedUser = contactList->GetString(contactList->GetSelection()).ToStdString();
-        
-        try {
-            std::vector<uint8_t> data;
-            data.push_back(4); 
-            
-            data.push_back(static_cast<uint8_t>(selectedUser.length()));
-            data.insert(data.end(), selectedUser.begin(), selectedUser.end());
-            
-            ws_->write(net::buffer(data));
-        } catch (const std::exception& e) {
-            wxMessageBox("Error al solicitar información: " + std::string(e.what()),
-                        "Error", wxOK | wxICON_ERROR);
-        }
-    }
+    void ProcessErrorMessage(const std::vector<uint8_t>& data);
+    void ProcessListUsersMessage(const std::vector<uint8_t>& data);
+    void ProcessUserInfoMessage(const std::vector<uint8_t>& data);
+    void ProcessNewUserMessage(const std::vector<uint8_t>& data);
+    void ProcessStatusChangeMessage(const std::vector<uint8_t>& data);
+    void ProcessMessageMessage(const std::vector<uint8_t>& data);
+    void ProcessHistoryMessage(const std::vector<uint8_t>& data);
+
+    void UpdateContactListUI();
 };
 
 ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario)
-    : wxFrame(nullptr, wxID_ANY, "Chat", wxDefaultPosition, wxSize(500, 400)), ws_(ws), usuario_(usuario) {
+    : wxFrame(nullptr, wxID_ANY, "Chat - " + usuario, wxDefaultPosition, wxSize(800, 600)), 
+      ws_(ws), 
+      usuario_(usuario),
+      running_(true) {
+
+
+    contacts_.insert({"~", ContactInfo("Chat General", EstadoUsuario::ACTIVO)});
     
     wxPanel* panel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
+
+    wxBoxSizer* statusSizer = new wxBoxSizer(wxHORIZONTAL);
+    statusSizer->Add(new wxStaticText(panel, wxID_ANY, "Estado:"), 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+    
+    wxString statusChoices[] = {"Activo", "Ocupado", "Inactivo"};
+    statusChoice = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 3, statusChoices);
+    statusChoice->SetSelection(0); 
+    statusSizer->Add(statusChoice, 1, wxALL, 5);
+    
+    leftSizer->Add(statusSizer, 0, wxEXPAND);
+
+    leftSizer->Add(new wxStaticText(panel, wxID_ANY, "Contactos:"), 0, wxALL, 5);
     contactList = new wxListBox(panel, wxID_ANY);
     leftSizer->Add(contactList, 1, wxALL | wxEXPAND, 5);
 
-    wxButton* addContactButton = new wxButton(panel, wxID_ANY, "Agregar Contacto");
-    leftSizer->Add(addContactButton, 0, wxALL | wxEXPAND, 5);
+    wxBoxSizer* contactButtonsSizer = new wxBoxSizer(wxHORIZONTAL);
+    
+    addContactButton = new wxButton(panel, wxID_ANY, "Agregar");
+    contactButtonsSizer->Add(addContactButton, 1, wxALL, 5);
 
-    checkUserInfoButton = new wxButton(panel, wxID_ANY, "Ver Info Usuario");
-    leftSizer->Add(checkUserInfoButton, 0, wxALL | wxEXPAND, 5);
+    checkUserInfoButton = new wxButton(panel, wxID_ANY, "Info");
+    contactButtonsSizer->Add(checkUserInfoButton, 1, wxALL, 5);
+    
+    refreshUsersButton = new wxButton(panel, wxID_ANY, "Actualizar");
+    contactButtonsSizer->Add(refreshUsersButton, 1, wxALL, 5);
+    
+    leftSizer->Add(contactButtonsSizer, 0, wxEXPAND);
 
     wxBoxSizer* rightSizer = new wxBoxSizer(wxVERTICAL);
-    chatBox = new wxTextCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY);
+
+    chatTitle = new wxStaticText(panel, ID_CHAT_TITLE, "Chat con: [Seleccione un contacto]");
+    rightSizer->Add(chatTitle, 0, wxALL, 5);
+
+    chatBox = new wxTextCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, 
+                            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
     rightSizer->Add(chatBox, 1, wxALL | wxEXPAND, 5);
 
+    wxBoxSizer* inputSizer = new wxBoxSizer(wxHORIZONTAL);
     messageInput = new wxTextCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
-    rightSizer->Add(messageInput, 0, wxALL | wxEXPAND, 5);
+    inputSizer->Add(messageInput, 1, wxALL, 5);
 
-    wxButton* sendButton = new wxButton(panel, wxID_ANY, "Enviar");
-    rightSizer->Add(sendButton, 0, wxALL | wxCENTER, 5);
+    sendButton = new wxButton(panel, wxID_ANY, "Enviar");
+    inputSizer->Add(sendButton, 0, wxALL, 5);
+    
+    rightSizer->Add(inputSizer, 0, wxEXPAND);
 
-    mainSizer->Add(leftSizer, 1, wxEXPAND);
-    mainSizer->Add(rightSizer, 2, wxEXPAND);
-
-    checkUserInfoButton->Bind(wxEVT_BUTTON, &ChatFrame::OnCheckUserInfo, this);
-
-    panel->SetSizer(mainSizer);
+    mainSizer->Add(leftSizer, 1, wxEXPAND | wxALL, 10);
+    mainSizer->Add(rightSizer, 2, wxEXPAND | wxALL, 10);
 
     sendButton->Bind(wxEVT_BUTTON, &ChatFrame::OnSend, this);
     messageInput->Bind(wxEVT_TEXT_ENTER, &ChatFrame::OnSend, this);
     addContactButton->Bind(wxEVT_BUTTON, &ChatFrame::OnAddContact, this);
+    checkUserInfoButton->Bind(wxEVT_BUTTON, &ChatFrame::OnCheckUserInfo, this);
+    refreshUsersButton->Bind(wxEVT_BUTTON, &ChatFrame::OnRefreshUsers, this);
     contactList->Bind(wxEVT_LISTBOX, &ChatFrame::OnSelectContact, this);
+    statusChoice->Bind(wxEVT_CHOICE, &ChatFrame::OnChangeStatus, this);
+
+    panel->SetSizer(mainSizer);
+    mainSizer->Fit(this);
 
     StartReceivingMessages();
-    AskForChatPartner();
+    RequestUserList();
+
+
+    UpdateContactListUI();
+    
+
+    contactList->SetSelection(contactList->FindString("[A] Chat General"));
+    chatPartner_ = "~";
+    chatTitle->SetLabel("Chat con: Chat General");
 }
 
-void ChatFrame::AskForChatPartner() {
+ChatFrame::~ChatFrame() {
+    running_ = false;
     try {
-        beast::flat_buffer buffer;
-        std::vector<uint8_t> request = {1};
+        ws_->close(websocket::close_code::normal);
+    } catch (...) {
+
+    }
+}
+
+void ChatFrame::RequestUserList() {
+    try {
+        std::vector<uint8_t> request = CreateListUsersMessage();
         ws_->write(net::buffer(request));
     } catch (const std::exception& e) {
-        wxMessageBox("Error al solicitar la lista de contactos: " + std::string(e.what()),
+        wxMessageBox("Error al solicitar la lista de usuarios: " + std::string(e.what()),
                     "Error", wxOK | wxICON_ERROR);
     }
 }
@@ -133,11 +241,16 @@ void ChatFrame::AskForChatPartner() {
 void ChatFrame::LoadChatHistory() {
     if (chatPartner_.empty()) return;
     
-    chatBox->Clear();
-    if (chatHistory_.find(chatPartner_) != chatHistory_.end()) {
-        for (const auto& message : chatHistory_[chatPartner_]) {
-            chatBox->AppendText(message + "\n");
-        }
+    RequestChatHistory();
+}
+
+void ChatFrame::RequestChatHistory() {
+    try {
+        std::vector<uint8_t> request = CreateGetHistoryMessage(chatPartner_);
+        ws_->write(net::buffer(request));
+    } catch (const std::exception& e) {
+        wxMessageBox("Error al solicitar historial: " + std::string(e.what()),
+                    "Error", wxOK | wxICON_ERROR);
     }
 }
 
@@ -151,25 +264,9 @@ void ChatFrame::OnSend(wxCommandEvent&) {
     if (message.empty()) return;
 
     try {
-        std::vector<uint8_t> data;
-        data.push_back(2); 
-        
-        data.push_back(static_cast<uint8_t>(usuario_.length()));
-        data.insert(data.end(), usuario_.begin(), usuario_.end());
-        
-        data.push_back(static_cast<uint8_t>(chatPartner_.length()));
-        data.insert(data.end(), chatPartner_.begin(), chatPartner_.end());
-        
-        uint16_t msgLen = static_cast<uint16_t>(message.length());
-        data.push_back(static_cast<uint8_t>(msgLen >> 8));
-        data.push_back(static_cast<uint8_t>(msgLen & 0xFF));
-        data.insert(data.end(), message.begin(), message.end());
-
+        std::vector<uint8_t> data = CreateSendMessageMessage(chatPartner_, message);
         ws_->write(net::buffer(data));
-
-        std::string formatted_message = usuario_ + ": " + message;
-        chatHistory_[chatPartner_].push_back(formatted_message);
-        chatBox->AppendText(formatted_message + "\n");
+        
         messageInput->Clear();
     } catch (const std::exception& e) {
         wxMessageBox("Error al enviar mensaje: " + std::string(e.what()),
@@ -180,75 +277,56 @@ void ChatFrame::OnSend(wxCommandEvent&) {
 void ChatFrame::StartReceivingMessages() {
     std::thread([this]() {
         try {
-            while (true) {
+            while (running_) {
                 beast::flat_buffer buffer;
                 ws_->read(buffer);
                 
-                std::string data(static_cast<char*>(buffer.data().data()), buffer.data().size());
+
+                std::string data_str = beast::buffers_to_string(buffer.data());
+                std::vector<uint8_t> message(data_str.begin(), data_str.end());
                 
-                if (!data.empty()) {
-                    uint8_t code = data[0];
+                if (!message.empty()) {
+                    uint8_t code = message[0];
                     
                     switch (code) {
-                        case 53: { 
-                            uint8_t nameLen = data[1];
-                            std::string name = data.substr(2, nameLen);
-                            EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + nameLen]);
-                            
-                            wxGetApp().CallAfter([this, name]() {
-                                if (contactList->FindString(name) == wxNOT_FOUND) {
-                                    contactList->Append(name);
-                                }
-                            });
+                        case SERVER_ERROR:
+                            ProcessErrorMessage(message);
                             break;
-                        }
-                        case 2: { 
-                            uint8_t originLen = data[1];
-                            std::string origin = data.substr(2, originLen);
-                            
-                            uint8_t destLen = data[2 + originLen];
-                            std::string dest = data.substr(3 + originLen, destLen);
-                            
-                            uint16_t msgLen = (static_cast<uint16_t>(data[3 + originLen + destLen]) << 8) |
-                                             static_cast<uint16_t>(data[4 + originLen + destLen]);
-                            std::string message = data.substr(5 + originLen + destLen, msgLen);
-                            
-                            if (dest == usuario_ || origin == chatPartner_) {
-                                std::string formatted_message = origin + ": " + message;
-                                chatHistory_[origin].push_back(formatted_message);
-                                
-                                wxGetApp().CallAfter([this, formatted_message]() {
-                                    chatBox->AppendText(formatted_message + "\n");
-                                });
-                            }
+                        case SERVER_LIST_USERS:
+                            ProcessListUsersMessage(message);
                             break;
-                        }
-                        case 5: { 
-                            uint8_t nameLen = data[1];
-                            std::string name = data.substr(2, nameLen);
-                            EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + nameLen]);
-                            
-                            wxGetApp().CallAfter([this, name, status]() {
-                                std::string statusStr;
-                                switch (status) {
-                                    case EstadoUsuario::ACTIVO: statusStr = "Activo"; break;
-                                    case EstadoUsuario::OCUPADO: statusStr = "Ocupado"; break;
-                                    case EstadoUsuario::INACTIVO: statusStr = "Inactivo"; break;
-                                    case EstadoUsuario::DESCONECTADO: statusStr = "Desconectado"; break;
-                                }
-                                
-                                wxString info = wxString::Format(
-                                    "Información del usuario %s:\n"
-                                    "Estado: %s",
-                                    name, statusStr
-                                );
-                                
-                                wxMessageBox(info, "Información de Usuario", wxOK | wxICON_INFORMATION);
-                            });
+                        case SERVER_USER_INFO:
+                            ProcessUserInfoMessage(message);
                             break;
-                        }
+                        case SERVER_NEW_USER:
+                            ProcessNewUserMessage(message);
+                            break;
+                        case SERVER_STATUS_CHANGE:
+                            ProcessStatusChangeMessage(message);
+                            break;
+                        case SERVER_MESSAGE:
+                            ProcessMessageMessage(message);
+                            break;
+                        case SERVER_HISTORY:
+                            ProcessHistoryMessage(message);
+                            break;
+                        default:
+                            break;
                     }
                 }
+            }
+        } catch (const beast::error_code& ec) {
+            if (ec == websocket::error::closed) {
+                wxGetApp().CallAfter([this]() {
+                    wxMessageBox("Conexión cerrada por el servidor", "Aviso", wxOK | wxICON_INFORMATION);
+                    Close();
+                });
+            } else {
+                wxGetApp().CallAfter([this, ec]() {
+                    wxMessageBox("Error en la conexión: " + ec.message(),
+                                "Error", wxOK | wxICON_ERROR);
+                    Close();
+                });
             }
         } catch (const std::exception& e) {
             wxGetApp().CallAfter([this, e]() {
@@ -267,66 +345,463 @@ void ChatFrame::OnAddContact(wxCommandEvent&) {
     if (dialog.ShowModal() == wxID_OK) {
         std::string contactName = dialog.GetValue().ToStdString();
         if (!contactName.empty()) {
-            contactList->Append(contactName);
+            try {
+                std::vector<uint8_t> request = CreateGetUserMessage(contactName);
+                ws_->write(net::buffer(request));
+            } catch (const std::exception& e) {
+                wxMessageBox("Error al solicitar información de usuario: " + std::string(e.what()),
+                           "Error", wxOK | wxICON_ERROR);
+            }
         }
     }
 }
 
 void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
-    chatPartner_ = contactList->GetString(evt.GetSelection()).ToStdString();
+    wxString selectedItem = contactList->GetString(evt.GetSelection());
+
+
+    wxString contactName = selectedItem.AfterFirst(']').Trim(true).Trim(false);
+    
+    chatPartner_ = contactName.ToStdString();
+
+    wxString titleText = wxString("Chat con: ") + 
+                      (chatPartner_ == "~" ? wxString("Chat General") : wxString(chatPartner_));
+    chatTitle->SetLabel(titleText);
+
+    chatBox->Clear();
     LoadChatHistory();
+}
+
+void ChatFrame::OnCheckUserInfo(wxCommandEvent&) {
+    if (contactList->GetSelection() == wxNOT_FOUND) {
+        wxMessageBox("Seleccione un usuario primero", "Aviso", wxOK | wxICON_INFORMATION);
+        return;
+    }
+
+    wxString selectedItem = contactList->GetString(contactList->GetSelection());
+    wxString contactName = selectedItem.AfterFirst(']').Trim(true).Trim(false);
+    std::string username = contactName.ToStdString();
+    
+    if (username == "~" || username == "Chat General") {
+        wxMessageBox("No se puede obtener información del chat general", "Aviso", wxOK | wxICON_INFORMATION);
+        return;
+    }
+    
+    try {
+        std::vector<uint8_t> request = CreateGetUserMessage(username);
+        ws_->write(net::buffer(request));
+    } catch (const std::exception& e) {
+        wxMessageBox("Error al solicitar información de usuario: " + std::string(e.what()),
+                   "Error", wxOK | wxICON_ERROR);
+    }
+}
+
+void ChatFrame::OnRefreshUsers(wxCommandEvent&) {
+    RequestUserList();
+}
+
+void ChatFrame::OnChangeStatus(wxCommandEvent&) {
+    int selection = statusChoice->GetSelection();
+    EstadoUsuario newStatus;
+    
+    switch (selection) {
+        case 0: newStatus = EstadoUsuario::ACTIVO; break;
+        case 1: newStatus = EstadoUsuario::OCUPADO; break;
+        case 2: newStatus = EstadoUsuario::INACTIVO; break;
+        default: newStatus = EstadoUsuario::ACTIVO; break;
+    }
+    
+    try {
+        std::vector<uint8_t> request = CreateChangeStatusMessage(newStatus);
+        ws_->write(net::buffer(request));
+    } catch (const std::exception& e) {
+        wxMessageBox("Error al cambiar estado: " + std::string(e.what()),
+                   "Error", wxOK | wxICON_ERROR);
+    }
+}
+
+
+std::vector<uint8_t> ChatFrame::CreateListUsersMessage() {
+    return {CLIENT_LIST_USERS};
+}
+
+std::vector<uint8_t> ChatFrame::CreateGetUserMessage(const std::string& username) {
+    std::vector<uint8_t> message = {CLIENT_GET_USER, static_cast<uint8_t>(username.size())};
+    message.insert(message.end(), username.begin(), username.end());
+    return message;
+}
+
+std::vector<uint8_t> ChatFrame::CreateChangeStatusMessage(EstadoUsuario status) {
+    std::vector<uint8_t> message = {
+        CLIENT_CHANGE_STATUS, 
+        static_cast<uint8_t>(usuario_.size())
+    };
+    message.insert(message.end(), usuario_.begin(), usuario_.end());
+    message.push_back(static_cast<uint8_t>(status));
+    return message;
+}
+
+std::vector<uint8_t> ChatFrame::CreateSendMessageMessage(const std::string& dest, const std::string& message) {
+    if (message.size() > 255) {
+        wxMessageBox("El mensaje es demasiado largo (máximo 255 caracteres)", 
+                    "Aviso", wxOK | wxICON_WARNING);
+        return {};
+    }
+    
+    std::vector<uint8_t> data = {
+        CLIENT_SEND_MESSAGE, 
+        static_cast<uint8_t>(dest.size())
+    };
+    data.insert(data.end(), dest.begin(), dest.end());
+    data.push_back(static_cast<uint8_t>(message.size()));
+    data.insert(data.end(), message.begin(), message.end());
+    return data;
+}
+
+std::vector<uint8_t> ChatFrame::CreateGetHistoryMessage(const std::string& chat) {
+    std::vector<uint8_t> message = {CLIENT_GET_HISTORY, static_cast<uint8_t>(chat.size())};
+    message.insert(message.end(), chat.begin(), chat.end());
+    return message;
+}
+
+
+void ChatFrame::ProcessErrorMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    ErrorCode errorCode = static_cast<ErrorCode>(data[1]);
+    wxString errorMessage;
+    
+    switch (errorCode) {
+        case ERROR_USER_NOT_FOUND:
+            errorMessage = "El usuario solicitado no existe";
+            break;
+        case ERROR_INVALID_STATUS:
+            errorMessage = "Estado de usuario inválido";
+            break;
+        case ERROR_EMPTY_MESSAGE:
+            errorMessage = "No se puede enviar un mensaje vacío";
+            break;
+        case ERROR_DISCONNECTED_USER:
+            errorMessage = "No se puede enviar mensaje a un usuario desconectado";
+            break;
+        default:
+            errorMessage = "Error desconocido";
+            break;
+    }
+    
+    wxGetApp().CallAfter([errorMessage]() {
+        wxMessageBox(errorMessage, "Error", wxOK | wxICON_ERROR);
+    });
+}
+
+void ChatFrame::ProcessListUsersMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    uint8_t numUsers = data[1];
+    size_t offset = 2;
+
+
+    ContactInfo chatGeneral = contacts_["~"];
+    contacts_.clear();
+    contacts_["~"] = chatGeneral;
+    
+    for (uint8_t i = 0; i < numUsers; i++) {
+        if (offset >= data.size()) break;
+        
+        uint8_t userLen = data[offset++];
+        if (offset + userLen > data.size()) break;
+        
+        std::string username(data.begin() + offset, data.begin() + offset + userLen);
+        offset += userLen;
+        
+        if (offset >= data.size()) break;
+        
+        EstadoUsuario status = static_cast<EstadoUsuario>(data[offset++]);
+
+
+        contacts_.emplace(username, ContactInfo(username, status));
+    }
+    
+    wxGetApp().CallAfter([this]() {
+        UpdateContactListUI();
+    });
+}
+
+void ChatFrame::ProcessUserInfoMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    uint8_t userLen = data[1];
+    if (2 + userLen > data.size()) return;
+    
+    std::string username(data.begin() + 2, data.begin() + 2 + userLen);
+    
+    if (2 + userLen + 1 > data.size()) return;
+    
+    EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + userLen]);
+    
+    std::string statusStr;
+    switch (status) {
+        case EstadoUsuario::ACTIVO: statusStr = "Activo"; break;
+        case EstadoUsuario::OCUPADO: statusStr = "Ocupado"; break;
+        case EstadoUsuario::INACTIVO: statusStr = "Inactivo"; break;
+        case EstadoUsuario::DESCONECTADO: statusStr = "Desconectado"; break;
+    }
+    
+    wxGetApp().CallAfter([username, statusStr]() {
+        wxString info = wxString::Format(
+            "Información del usuario %s:\n"
+            "Estado: %s",
+            username, statusStr
+        );
+        
+        wxMessageBox(info, "Información de Usuario", wxOK | wxICON_INFORMATION);
+    });
+}
+
+void ChatFrame::ProcessNewUserMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    uint8_t userLen = data[1];
+    if (2 + userLen > data.size()) return;
+    
+    std::string username(data.begin() + 2, data.begin() + 2 + userLen);
+    
+    if (2 + userLen + 1 > data.size()) return;
+    
+    EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + userLen]);
+    
+
+    contacts_.emplace(username, ContactInfo(username, status));
+    
+    wxGetApp().CallAfter([this]() {
+        UpdateContactListUI();
+    });
+}
+
+void ChatFrame::ProcessStatusChangeMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    uint8_t userLen = data[1];
+    if (2 + userLen > data.size()) return;
+    
+    std::string username(data.begin() + 2, data.begin() + 2 + userLen);
+    
+    if (2 + userLen + 1 > data.size()) return;
+    
+    EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + userLen]);
+
+    auto it = contacts_.find(username);
+    if (it != contacts_.end()) {
+        it->second.estado = status;
+    } else {
+        contacts_.emplace(username, ContactInfo(username, status));
+    }
+    
+    wxGetApp().CallAfter([this]() {
+        UpdateContactListUI();
+    });
+}
+
+void ChatFrame::ProcessMessageMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    uint8_t originLen = data[1];
+    if (2 + originLen > data.size()) return;
+    
+    std::string origin(data.begin() + 2, data.begin() + 2 + originLen);
+    
+    if (2 + originLen + 1 > data.size()) return;
+    
+    uint8_t msgLen = data[2 + originLen];
+    if (3 + originLen + msgLen > data.size()) return;
+    
+    std::string message(data.begin() + 3 + originLen, data.begin() + 3 + originLen + msgLen);
+
+    std::string formatted = origin + ": " + message;
+    
+    {
+        std::lock_guard<std::mutex> lock(chatHistoryMutex_);
+
+        std::string chatKey;
+        if (origin == usuario_) {
+            chatKey = chatPartner_;
+        } else {
+            chatKey = (chatPartner_ == "~") ? "~" : origin;
+        }
+        
+        chatHistory_[chatKey].push_back(formatted);
+    }
+
+    if (chatPartner_ == "~" || origin == chatPartner_ || origin == usuario_) {
+        wxGetApp().CallAfter([this, formatted]() {
+            chatBox->AppendText(formatted + "\n");
+        });
+    }
+}
+
+void ChatFrame::ProcessHistoryMessage(const std::vector<uint8_t>& data) {
+    if (data.size() < 2) return;
+    
+    uint8_t numMessages = data[1];
+    size_t offset = 2;
+    
+    std::vector<std::string> messages;
+    
+    for (uint8_t i = 0; i < numMessages; i++) {
+        if (offset >= data.size()) break;
+        
+        uint8_t userLen = data[offset++];
+        if (offset + userLen > data.size()) break;
+        
+        std::string username(data.begin() + offset, data.begin() + offset + userLen);
+        offset += userLen;
+        
+        if (offset >= data.size()) break;
+        
+        uint8_t msgLen = data[offset++];
+        if (offset + msgLen > data.size()) break;
+        
+        std::string message(data.begin() + offset, data.begin() + offset + msgLen);
+        offset += msgLen;
+
+        std::string formatted = username + ": " + message;
+        messages.push_back(formatted);
+    }
+    
+    {
+        std::lock_guard<std::mutex> lock(chatHistoryMutex_);
+        chatHistory_[chatPartner_] = messages;
+    }
+    
+    wxGetApp().CallAfter([this, messages]() {
+        chatBox->Clear();
+        for (const auto& msg : messages) {
+            chatBox->AppendText(msg + "\n");
+        }
+    });
+}
+
+void ChatFrame::UpdateContactListUI() {
+    int currentSelection = contactList->GetSelection();
+    wxString currentItem = (currentSelection != wxNOT_FOUND) ? 
+                         contactList->GetString(currentSelection) : wxString();
+
+    contactList->Clear();
+    
+    for (const auto& [name, info] : contacts_) {
+        contactList->Append(info.FormatName());
+    }
+
+    if (!currentItem.IsEmpty()) {
+        int pos = contactList->FindString(currentItem);
+        if (pos != wxNOT_FOUND) {
+            contactList->SetSelection(pos);
+        } else {
+            wxString contactName = currentItem.AfterFirst(']').Trim(true).Trim(false);
+            for (unsigned int i = 0; i < contactList->GetCount(); i++) {
+                if (contactList->GetString(i).AfterFirst(']').Trim(true).Trim(false) == contactName) {
+                    contactList->SetSelection(i);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 class MyFrame : public wxFrame {
 public:
-    MyFrame() : wxFrame(nullptr, wxID_ANY, "Cliente WebSocket", wxDefaultPosition, wxSize(300, 150)) {
+    MyFrame() : wxFrame(nullptr, wxID_ANY, "Cliente WebSocket", wxDefaultPosition, wxSize(400, 250)) {
         wxPanel* panel = new wxPanel(this);
-        wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
+        wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
+        wxBoxSizer* userSizer = new wxBoxSizer(wxHORIZONTAL);
+        userSizer->Add(new wxStaticText(panel, wxID_ANY, "Nombre de usuario:"), 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+        nombreInput = new wxTextCtrl(panel, wxID_ANY);
+        userSizer->Add(nombreInput, 1, wxALL, 10);
+        mainSizer->Add(userSizer, 0, wxEXPAND);
 
-        wxStaticText* label = new wxStaticText(panel, wxID_ANY, "Ingrese su nombre:");
-        sizer->Add(label, 0, wxALL | wxCENTER, 10);
+        wxBoxSizer* ipSizer = new wxBoxSizer(wxHORIZONTAL);
+        ipSizer->Add(new wxStaticText(panel, wxID_ANY, "IP del servidor:"), 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+        ipInput = new wxTextCtrl(panel, wxID_ANY, "3.13.27.172");
+        ipSizer->Add(ipInput, 1, wxALL, 10);
+        mainSizer->Add(ipSizer, 0, wxEXPAND);
 
-        inputBox = new wxTextCtrl(panel, wxID_ANY);
-        sizer->Add(inputBox, 0, wxALL | wxEXPAND, 10);
+        wxBoxSizer* portSizer = new wxBoxSizer(wxHORIZONTAL);
+        portSizer->Add(new wxStaticText(panel, wxID_ANY, "Puerto:"), 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);
+        puertoInput = new wxTextCtrl(panel, wxID_ANY, "3000");
+        portSizer->Add(puertoInput, 1, wxALL, 10);
+        mainSizer->Add(portSizer, 0, wxEXPAND);
 
-        wxButton* sendButton = new wxButton(panel, wxID_ANY, "Conectar");
-        sizer->Add(sendButton, 0, wxALL | wxCENTER, 10);
+        wxButton* conectarButton = new wxButton(panel, wxID_ANY, "Conectar");
+        mainSizer->Add(conectarButton, 0, wxALL | wxCENTER, 10);
 
-        sendButton->Bind(wxEVT_BUTTON, &MyFrame::OnSend, this);
-        panel->SetSizer(sizer);
+        statusLabel = new wxStaticText(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
+        statusLabel->SetForegroundColour(wxColour(255, 0, 0));
+        mainSizer->Add(statusLabel, 0, wxALL | wxEXPAND, 10);
+
+        conectarButton->Bind(wxEVT_BUTTON, &MyFrame::OnConectar, this);
+        panel->SetSizer(mainSizer);
     }
 
 private:
-    wxTextCtrl* inputBox;
-    void OnSend(wxCommandEvent&);
+    wxTextCtrl* nombreInput;
+    wxTextCtrl* ipInput;
+    wxTextCtrl* puertoInput;
+    wxStaticText* statusLabel;
+    
+    void OnConectar(wxCommandEvent&) {
+        std::string usuario = nombreInput->GetValue().ToStdString();
+        std::string ip = ipInput->GetValue().ToStdString();
+        std::string puerto = puertoInput->GetValue().ToStdString();
+        
+        if (usuario.empty()) {
+            statusLabel->SetLabel("Error: El nombre de usuario no puede estar vacío");
+            return;
+        }
+        
+        if (usuario == "~") {
+            statusLabel->SetLabel("Error: El nombre '~' está reservado para el chat general");
+            return;
+        }
+        
+        if (ip.empty()) {
+            statusLabel->SetLabel("Error: La IP del servidor no puede estar vacía");
+            return;
+        }
+        
+        if (puerto.empty()) {
+            statusLabel->SetLabel("Error: El puerto no puede estar vacío");
+            return;
+        }
+        
+        statusLabel->SetLabel("Conectando...");
+
+        std::thread([this, usuario, ip, puerto]() {
+            try {
+                net::io_context ioc;
+                tcp::resolver resolver(ioc);
+                auto const results = resolver.resolve(ip, puerto);
+
+                tcp::socket socket(ioc);
+                net::connect(socket, results.begin(), results.end());
+
+                auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
+
+                std::string url = "/?name=" + usuario;
+                ws->handshake(ip + ":" + puerto, url);
+
+                wxGetApp().CallAfter([this, ws, usuario]() {
+                    ChatFrame* chatFrame = new ChatFrame(ws, usuario);
+                    chatFrame->Show(true);
+                    Close();
+                });
+            } catch (const std::exception& e) {
+                wxGetApp().CallAfter([this, e]() {
+                    statusLabel->SetLabel("Error: " + std::string(e.what()));
+                });
+            }
+        }).detach();
+    }
 };
-
-void MyFrame::OnSend(wxCommandEvent&) {
-    std::string usuario = inputBox->GetValue().ToStdString();
-    if (usuario.empty()) {
-        wxMessageBox("El nombre de usuario no puede estar vacío", "Error", wxOK | wxICON_ERROR);
-        return;
-    }
-
-    try {
-        net::io_context ioc;
-        tcp::resolver resolver(ioc);
-        auto const results = resolver.resolve("3.13.27.172", "3000");
-
-        tcp::socket socket(ioc);
-        net::connect(socket, results.begin(), results.end());
-
-        auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
-        std::string url = "ws://3.13.27.172:3000?name=" + usuario;
-        ws->handshake(url, "/");
-
-        ChatFrame* chatFrame = new ChatFrame(ws, usuario);
-        chatFrame->Show(true);
-        Close();
-    } catch (const std::exception& e) {
-        wxMessageBox("Error: " + std::string(e.what()), "Error de conexión", wxOK | wxICON_ERROR);
-    }
-}   
 
 bool MyApp::OnInit() {
     MyFrame* frame = new MyFrame();
