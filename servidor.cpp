@@ -14,6 +14,7 @@
 #include <chrono>
 #include <fstream>
 #include <ctime>
+#include <iomanip>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -702,7 +703,7 @@ int main(int argc, char* argv[]) {
             beast::flat_buffer buffer;
             http::request<http::string_body> req;
             http::read(socket, buffer, req);
-            
+
             std::string query_string = extract_query_string(req.target());
 
             std::thread([&servidor](tcp::socket sock, std::string qs) {
