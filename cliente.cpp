@@ -774,33 +774,60 @@ private:
         }
         
         statusLabel->SetLabel("Conectando...");
-
+    
         std::thread([this, usuario, ip, puerto]() {
             try {
+                std::cout << "Iniciando conexión a " << ip << ":" << puerto << std::endl;
+
                 net::io_context ioc;
                 tcp::resolver resolver(ioc);
                 auto const results = resolver.resolve(ip, puerto);
-    
+                
+                std::cout << "Dirección resuelta, conectando socket TCP..." << std::endl;
+
                 tcp::socket socket(ioc);
                 net::connect(socket, results.begin(), results.end());
-    
+                
+                std::cout << "Socket TCP conectado, creando stream WebSocket..." << std::endl;
+
                 auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
 
-                ws->set_option(websocket::stream_base::timeout::suggested(
-                    beast::role_type::client));
+                ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
 
-                ws->handshake(ip, "/?name=" + usuario);
+                std::string host = ip + ":" + puerto;
+                std::string target = "/?name=" + usuario;
                 
-                std::cout << "Handshake completado con éxito" << std::endl;
-    
+                std::cout << "Iniciando handshake WebSocket con host=" << host << " y target=" << target << std::endl;
+
+                ws->handshake(host, target);
+                
+                std::cout << "Handshake WebSocket completado con éxito" << std::endl;
+
                 wxGetApp().CallAfter([this, ws, usuario]() {
                     ChatFrame* chatFrame = new ChatFrame(ws, usuario);
                     chatFrame->Show(true);
                     Close();
                 });
-            } catch (const std::exception& e) {
+            } 
+            catch (const beast::error_code& ec) {
+
+                wxGetApp().CallAfter([this, ec]() {
+                    std::string errorMsg = "Error de conexión: " + ec.message();
+                    statusLabel->SetLabel("Error: " + errorMsg);
+                    std::cerr << errorMsg << std::endl;
+                });
+            }
+            catch (const std::exception& e) {
                 wxGetApp().CallAfter([this, e]() {
-                    statusLabel->SetLabel("Error: " + std::string(e.what()));
+                    std::string errorMsg = e.what();
+                    statusLabel->SetLabel("Error: " + errorMsg);
+                    std::cerr << "Excepción: " << errorMsg << std::endl;
+                });
+            }
+            catch (...) {
+                wxGetApp().CallAfter([this]() {
+                    statusLabel->SetLabel("Error: Excepción desconocida durante la conexión");
+                    std::cerr << "Error desconocido durante la conexión" << std::endl;
                 });
             }
         }).detach();
