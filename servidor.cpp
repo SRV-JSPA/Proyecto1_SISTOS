@@ -129,7 +129,6 @@ public:
     }
 };
 
-// Clase principal del servidor
 class ChatServer {
 private:
     std::unordered_map<std::string, std::shared_ptr<Usuario>> usuarios;
@@ -139,11 +138,10 @@ private:
     Logger logger;
     std::chrono::seconds timeout_inactividad;
     std::atomic<bool> running;
-    
-    // Thread para comprobar inactividad de usuarios
+
     void check_inactivity() {
         while (running) {
-            std::this_thread::sleep_for(std::chrono::seconds(10)); // Comprueba cada 10 segundos
+            std::this_thread::sleep_for(std::chrono::seconds(10)); 
             
             auto ahora = std::chrono::system_clock::now();
             std::lock_guard<std::mutex> lock(usuarios_mutex);
@@ -156,8 +154,7 @@ private:
                     if (tiempo_inactivo > timeout_inactividad) {
                         usuario->estado = EstadoUsuario::INACTIVO;
                         logger.log("Usuario " + nombre + " cambiado a INACTIVO por timeout");
-                        
-                        // Notificar cambio de estado a todos los usuarios
+
                         std::vector<uint8_t> notificacion = crear_mensaje_cambio_estado(nombre, usuario->estado);
                         broadcast_mensaje(notificacion);
                     }
@@ -197,7 +194,6 @@ private:
         std::string nombre;
         if (query_string.find("name=") != std::string::npos) {
             nombre = query_string.substr(query_string.find("name=") + 5);
-            // Si hay más parámetros, cortar en el &
             size_t pos = nombre.find('&');
             if (pos != std::string::npos) {
                 nombre = nombre.substr(0, pos);
@@ -316,8 +312,7 @@ private:
         auto mensaje = crear_mensaje_lista_usuarios();
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
-    
-    // Procesar mensaje de tipo 2: Obtener usuario por nombre
+
     void procesar_obtener_usuario(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
@@ -567,7 +562,9 @@ public:
 
             net::ip::address ip_address = ws->next_layer().remote_endpoint().address();
             
+            ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
             ws->accept();
+
             
             logger.log("Conexión aceptada: " + nombre_usuario + " desde " + ip_address.to_string());
 

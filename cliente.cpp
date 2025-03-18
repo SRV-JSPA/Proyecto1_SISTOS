@@ -799,7 +799,10 @@ private:
                 
                 std::cout << "Iniciando handshake WebSocket con host=" << host << " y target=" << target << std::endl;
 
+                std::cout << "Intentando handshake con " << host << std::endl;
                 ws->handshake(host, target);
+                std::cout << "Handshake WebSocket exitoso!" << std::endl;
+
                 
                 std::cout << "Handshake WebSocket completado con éxito" << std::endl;
 
