@@ -163,46 +163,6 @@ private:
         }
     }
 
-    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
-        std::lock_guard<std::mutex> lock(usuarios_mutex);
-        for (auto& [nombre, usuario] : usuarios) {
-            if (usuario->estado != EstadoUsuario::DESCONECTADO) {
-                try {
-                    usuario->ws_stream->write(net::buffer(mensaje));
-                } catch (const std::exception& e) {
-                    logger.log("Error enviando broadcast a " + nombre + ": " + e.what());
-                }
-            }
-        }
-    }
-
-    bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
-        std::lock_guard<std::mutex> lock(usuarios_mutex);
-        auto it = usuarios.find(nombre_usuario);
-        if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
-            try {
-                it->second->ws_stream->write(net::buffer(mensaje));
-                return true;
-            } catch (const std::exception& e) {
-                logger.log("Error enviando mensaje a " + nombre_usuario + ": " + e.what());
-            }
-        }
-        return false;
-    }
-
-    std::string parse_nombre_usuario(const std::string& query_string) {
-        std::string nombre;
-        if (query_string.find("name=") != std::string::npos) {
-            nombre = query_string.substr(query_string.find("name=") + 5);
-            size_t pos = nombre.find('&');
-            if (pos != std::string::npos) {
-                nombre = nombre.substr(0, pos);
-            }
-            boost::replace_all(nombre, "%20", " ");
-        }
-        return nombre;
-    }
-
     std::vector<uint8_t> crear_mensaje_error(ErrorCode codigo) {
         std::vector<uint8_t> mensaje = {SERVER_ERROR, static_cast<uint8_t>(codigo)};
         return mensaje;
@@ -246,14 +206,6 @@ private:
         return mensaje;
     }
 
-    std::vector<uint8_t> crear_mensaje_cambio_estado(const std::string& nombre, EstadoUsuario estado) {
-        std::vector<uint8_t> mensaje = {SERVER_STATUS_CHANGE, static_cast<uint8_t>(nombre.size())};
-        mensaje.insert(mensaje.end(), nombre.begin(), nombre.end());
-        mensaje.push_back(static_cast<uint8_t>(estado));
-        
-        return mensaje;
-    }
-
     std::vector<uint8_t> crear_mensaje_recibido(const std::string& origen, const std::string& contenido) {
         std::vector<uint8_t> mensaje = {
             SERVER_MESSAGE, 
@@ -275,9 +227,11 @@ private:
             size_t count = std::min(chat_general.size(), size_t(255));
             historial.reserve(count);
             
-            auto it = chat_general.end() - count;
-            for (size_t i = 0; i < count; i++) {
-                historial.push_back(std::make_shared<Mensaje>(*it++));
+            if (!chat_general.empty()) {
+                auto it = chat_general.end() - std::min(chat_general.size(), size_t(count));
+                for (size_t i = 0; i < std::min(chat_general.size(), size_t(count)); i++) {
+                    historial.push_back(std::make_shared<Mensaje>(*it++));
+                }
             }
         } else {
             std::lock_guard<std::mutex> lock(usuarios_mutex);
@@ -290,9 +244,11 @@ private:
             size_t count = std::min(it->second->historial_mensajes.size(), size_t(255));
             historial.reserve(count);
             
-            auto msg_it = it->second->historial_mensajes.end() - count;
-            for (size_t i = 0; i < count; i++) {
-                historial.push_back(std::make_shared<Mensaje>(*msg_it++));
+            if (!it->second->historial_mensajes.empty()) {
+                auto msg_it = it->second->historial_mensajes.end() - std::min(it->second->historial_mensajes.size(), size_t(count));
+                for (size_t i = 0; i < std::min(it->second->historial_mensajes.size(), size_t(count)); i++) {
+                    historial.push_back(std::make_shared<Mensaje>(*msg_it++));
+                }
             }
         }
 
@@ -304,6 +260,76 @@ private:
             mensaje.push_back(static_cast<uint8_t>(msg->contenido.size()));
             mensaje.insert(mensaje.end(), msg->contenido.begin(), msg->contenido.end());
         }
+        
+        return mensaje;
+    }
+
+public:
+    ChatServer() 
+        : logger("chat_server.log"), 
+          timeout_inactividad(60),
+          running(true) {
+
+        std::thread inactivity_thread(&ChatServer::check_inactivity, this);
+        inactivity_thread.detach();
+    }
+    
+    ~ChatServer() {
+        running = false;
+    }
+
+    std::mutex& get_usuarios_mutex() {
+        return usuarios_mutex;
+    }
+    
+    std::unordered_map<std::string, std::shared_ptr<Usuario>>& get_usuarios() {
+        return usuarios;
+    }
+
+    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
+        std::lock_guard<std::mutex> lock(usuarios_mutex);
+        for (auto& [nombre, usuario] : usuarios) {
+            if (usuario->estado != EstadoUsuario::DESCONECTADO) {
+                try {
+                    usuario->ws_stream->write(net::buffer(mensaje));
+                } catch (const std::exception& e) {
+                    logger.log("Error enviando broadcast a " + nombre + ": " + e.what());
+                }
+            }
+        }
+    }
+
+    bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
+        std::lock_guard<std::mutex> lock(usuarios_mutex);
+        auto it = usuarios.find(nombre_usuario);
+        if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
+            try {
+                it->second->ws_stream->write(net::buffer(mensaje));
+                return true;
+            } catch (const std::exception& e) {
+                logger.log("Error enviando mensaje a " + nombre_usuario + ": " + e.what());
+            }
+        }
+        return false;
+    }
+
+    std::string parse_nombre_usuario(const std::string& query_string) {
+        std::string nombre;
+        if (query_string.find("name=") != std::string::npos) {
+            nombre = query_string.substr(query_string.find("name=") + 5);
+            size_t pos = nombre.find('&');
+            if (pos != std::string::npos) {
+                nombre = nombre.substr(0, pos);
+            }
+            boost::replace_all(nombre, "%20", " ");
+        }
+        return nombre;
+    }
+
+    std::vector<uint8_t> crear_mensaje_cambio_estado(const std::string& nombre, EstadoUsuario estado) {
+        std::vector<uint8_t> mensaje = {SERVER_STATUS_CHANGE, static_cast<uint8_t>(nombre.size())};
+        mensaje.insert(mensaje.end(), nombre.begin(), nombre.end());
+        mensaje.push_back(static_cast<uint8_t>(estado));
         
         return mensaje;
     }
@@ -465,7 +491,6 @@ private:
         }
     }
     
-
     void procesar_obtener_historial(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
@@ -493,20 +518,6 @@ private:
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
 
-public:
-    ChatServer() 
-        : logger("chat_server.log"), 
-          timeout_inactividad(60),
-          running(true) {
-
-        std::thread inactivity_thread(&ChatServer::check_inactivity, this);
-        inactivity_thread.detach();
-    }
-    
-    ~ChatServer() {
-        running = false;
-    }
-
     void set_timeout_inactividad(int seconds) {
         timeout_inactividad = std::chrono::seconds(seconds);
         logger.log("Timeout de inactividad establecido a " + std::to_string(seconds) + " segundos");
@@ -515,9 +526,10 @@ public:
     void manejar_conexion(tcp::socket socket, const std::string& query_string) {
         try {
             std::string nombre_usuario = parse_nombre_usuario(query_string);
-            
+
             if (nombre_usuario.empty()) {
                 logger.log("Conexión rechazada: nombre de usuario vacío");
+
                 http::response<http::string_body> res{http::status::bad_request, 11};
                 res.set(http::field::server, "ChatServer");
                 res.set(http::field::content_type, "text/plain");
@@ -587,7 +599,6 @@ public:
                     usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
                 }
             }
-            
 
             std::vector<uint8_t> notificacion = {
                 SERVER_NEW_USER, 
@@ -708,29 +719,180 @@ int main(int argc, char* argv[]) {
             
             socket.set_option(tcp::socket::keep_alive(true));
 
+            http::request<http::string_body> req;
+            beast::flat_buffer buffer;
+            
             try {
-                beast::flat_buffer buffer;
-                http::request<http::string_body> req;
                 http::read(socket, buffer, req);
                 
                 std::cout << "Petición HTTP recibida: " << req.target() << std::endl;
-                
                 std::string query_string = extract_query_string(req.target());
                 std::cout << "Query string: " << query_string << std::endl;
 
-                std::thread([&servidor](tcp::socket sock, std::string qs) {
-                    servidor.manejar_conexion(std::move(sock), qs);
-                }, std::move(socket), query_string).detach();
-            }
-            catch (const beast::error_code& ec) {
+                std::string nombre_usuario = servidor.parse_nombre_usuario(query_string);
+
+                if (nombre_usuario.empty()) {
+                    http::response<http::string_body> res{http::status::bad_request, 11};
+                    res.set(http::field::server, "ChatServer");
+                    res.set(http::field::content_type, "text/plain");
+                    res.body() = "Nombre de usuario vacío";
+                    res.prepare_payload();
+                    http::write(socket, res);
+                    std::cout << "Conexión rechazada: nombre de usuario vacío" << std::endl;
+                    continue;
+                }
+                
+                if (nombre_usuario == "~") {
+                    http::response<http::string_body> res{http::status::bad_request, 11};
+                    res.set(http::field::server, "ChatServer");
+                    res.set(http::field::content_type, "text/plain");
+                    res.body() = "Nombre de usuario reservado";
+                    res.prepare_payload();
+                    http::write(socket, res);
+                    std::cout << "Conexión rechazada: nombre de usuario reservado" << std::endl;
+                    continue;
+                }
+
+                bool usuario_ya_conectado = false;
+                {
+                    std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
+                    auto& usuarios = servidor.get_usuarios();
+                    auto it = usuarios.find(nombre_usuario);
+                    if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
+                        usuario_ya_conectado = true;
+                    }
+                }
+                
+                if (usuario_ya_conectado) {
+                    http::response<http::string_body> res{http::status::bad_request, 11};
+                    res.set(http::field::server, "ChatServer");
+                    res.set(http::field::content_type, "text/plain");
+                    res.body() = "Usuario ya conectado";
+                    res.prepare_payload();
+                    http::write(socket, res);
+                    std::cout << "Conexión rechazada: usuario ya conectado: " << nombre_usuario << std::endl;
+                    continue;
+                }
+
+                auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
+
+                ws->accept(req);
+                std::cout << "WebSocket handshake aceptado para: " << nombre_usuario << std::endl;
+                
+
+                net::ip::address ip_address = ws->next_layer().remote_endpoint().address();
+                
+
+                {
+                    std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
+                    auto& usuarios = servidor.get_usuarios();
+                    auto it = usuarios.find(nombre_usuario);
+                    if (it != usuarios.end()) {
+                        it->second->ws_stream = ws;
+                        it->second->estado = EstadoUsuario::ACTIVO;
+                        it->second->actualizar_actividad();
+                        it->second->ip_address = ip_address;
+                    } else {
+                        usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
+                    }
+                }
+                
+
+                std::vector<uint8_t> notificacion = {
+                    SERVER_NEW_USER, 
+                    static_cast<uint8_t>(nombre_usuario.size())
+                };
+                notificacion.insert(notificacion.end(), nombre_usuario.begin(), nombre_usuario.end());
+                notificacion.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
+                
+                servidor.broadcast_mensaje(notificacion);
+                std::cout << "Usuario " << nombre_usuario << " conectado y notificado" << std::endl;
+                
+
+                std::thread([nombre_usuario, ws, &servidor]() {
+                    try {
+
+                        beast::flat_buffer buffer;
+                        
+                        while (true) {
+                            try {
+                                ws->read(buffer);
+                                
+                                auto data = beast::buffers_to_string(buffer.data());
+                                std::vector<uint8_t> datos(data.begin(), data.end());
+                                buffer.consume(buffer.size());
+                                
+                                if (datos.empty()) {
+                                    continue;
+                                }
+                                
+                                switch (datos[0]) {
+                                    case CLIENT_LIST_USERS:
+                                        servidor.procesar_listar_usuarios(nombre_usuario);
+                                        break;
+                                        
+                                    case CLIENT_GET_USER:
+                                        servidor.procesar_obtener_usuario(nombre_usuario, datos);
+                                        break;
+                                        
+                                    case CLIENT_CHANGE_STATUS:
+                                        servidor.procesar_cambiar_estado(nombre_usuario, datos);
+                                        break;
+                                        
+                                    case CLIENT_SEND_MESSAGE:
+                                        servidor.procesar_enviar_mensaje(nombre_usuario, datos);
+                                        break;
+                                        
+                                    case CLIENT_GET_HISTORY:
+                                        servidor.procesar_obtener_historial(nombre_usuario, datos);
+                                        break;
+                                        
+                                    default:
+                                        std::cout << "Mensaje desconocido de " << nombre_usuario << ": tipo " 
+                                                 << std::to_string(datos[0]) << std::endl;
+                                        break;
+                                }
+                                
+                            } catch (const beast::error_code& ec) {
+                                if (ec == websocket::error::closed) {
+                                    std::cout << "Conexión cerrada por cliente: " << nombre_usuario << std::endl;
+                                    break;
+                                } else {
+                                    std::cout << "Error leyendo de cliente " << nombre_usuario << ": " << ec.message() << std::endl;
+                                    break;
+                                }
+                            } catch (const std::exception& e) {
+                                std::cout << "Error procesando mensaje de " << nombre_usuario << ": " << e.what() << std::endl;
+                                break;
+                            }
+                        }
+
+                        {
+                            std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
+                            auto& usuarios = servidor.get_usuarios();
+                            auto it = usuarios.find(nombre_usuario);
+                            if (it != usuarios.end()) {
+                                it->second->estado = EstadoUsuario::DESCONECTADO;
+                                std::cout << "Usuario " << nombre_usuario << " marcado como DESCONECTADO" << std::endl;
+                            }
+                        }
+
+                        std::vector<uint8_t> notificacion_desconexion = servidor.crear_mensaje_cambio_estado(
+                            nombre_usuario, EstadoUsuario::DESCONECTADO);
+                        servidor.broadcast_mensaje(notificacion_desconexion);
+                        
+                    } catch (const std::exception& e) {
+                        std::cout << "Error en manejo de conexión de " << nombre_usuario << ": " << e.what() << std::endl;
+                    }
+                }).detach();
+                
+            } catch (const beast::error_code& ec) {
                 std::cerr << "Error en la lectura HTTP: " << ec.message() << std::endl;
-            }
-            catch (const std::exception& e) {
+            } catch (const std::exception& e) {
                 std::cerr << "Excepción en la lectura HTTP: " << e.what() << std::endl;
             }
         }
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         std::cerr << "Error en el servidor: " << e.what() << std::endl;
         return 1;
     }
