@@ -747,93 +747,92 @@ private:
     wxTextCtrl* ipInput;
     wxTextCtrl* puertoInput;
     wxStaticText* statusLabel;
-    
-    void OnConectar(wxCommandEvent&) {
-        std::string usuario = nombreInput->GetValue().ToStdString();
-        std::string ip = ipInput->GetValue().ToStdString();
-        std::string puerto = puertoInput->GetValue().ToStdString();
-        
-        if (usuario.empty()) {
-            statusLabel->SetLabel("Error: El nombre de usuario no puede estar vacío");
-            return;
-        }
-        
-        if (usuario == "~") {
-            statusLabel->SetLabel("Error: El nombre '~' está reservado para el chat general");
-            return;
-        }
-        
-        if (ip.empty()) {
-            statusLabel->SetLabel("Error: La IP del servidor no puede estar vacía");
-            return;
-        }
-        
-        if (puerto.empty()) {
-            statusLabel->SetLabel("Error: El puerto no puede estar vacío");
-            return;
-        }
-        
-        statusLabel->SetLabel("Conectando...");
-    
-        std::thread([this, usuario, ip, puerto]() {
-            try {
-                std::cout << "Iniciando conexión a " << ip << ":" << puerto << std::endl;
-        
-                net::io_context ioc;
-                tcp::resolver resolver(ioc);
-                auto const results = resolver.resolve(ip, puerto);
-                
-                std::cout << "Dirección resuelta, conectando socket TCP..." << std::endl;
-        
-                tcp::socket socket(ioc);
-                net::connect(socket, results.begin(), results.end());
-                
-                std::cout << "Socket TCP conectado, creando stream WebSocket..." << std::endl;
-        
-                auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
-                ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
 
-                ws->set_option(websocket::stream_base::decorator(
-                    [](websocket::request_type& req) {
-                        req.set(http::field::user_agent, "Chat Client");
-                    }));
-                std::string host = ip;
-                std::string target = "/?name=" + usuario;
-                
-                std::cout << "Iniciando handshake WebSocket con host=" << host 
-                          << " y target=" << target << std::endl;
-
-                ws->handshake(host, target);
-                std::cout << "Handshake WebSocket exitoso!" << std::endl;
-        
-                wxGetApp().CallAfter([this, ws, usuario]() {
-                    ChatFrame* chatFrame = new ChatFrame(ws, usuario);
-                    chatFrame->Show(true);
-                    Close();
-                });
-            } 
-            catch (const beast::error_code& ec) {
-                wxGetApp().CallAfter([this, ec]() {
-                    std::string errorMsg = "Error de conexión: " + ec.message();
-                    statusLabel->SetLabel("Error: " + errorMsg);
-                    std::cerr << errorMsg << std::endl;
-                });
-            }
-            catch (const std::exception& e) {
-                wxGetApp().CallAfter([this, e]() {
-                    std::string errorMsg = e.what();
-                    statusLabel->SetLabel("Error: " + errorMsg);
-                    std::cerr << "Excepción: " << errorMsg << std::endl;
-                });
-            }
-            catch (...) {
-                wxGetApp().CallAfter([this]() {
-                    statusLabel->SetLabel("Error: Excepción desconocida durante la conexión");
-                    std::cerr << "Error desconocido durante la conexión" << std::endl;
-                });
-            }
-        }).detach();
+void OnConectar(wxCommandEvent&) {
+    std::string usuario = nombreInput->GetValue().ToStdString();
+    std::string ip = ipInput->GetValue().ToStdString();
+    std::string puerto = puertoInput->GetValue().ToStdString();
+    
+    if (usuario.empty()) {
+        statusLabel->SetLabel("Error: El nombre de usuario no puede estar vacío");
+        return;
     }
+    
+    if (usuario == "~") {
+        statusLabel->SetLabel("Error: El nombre '~' está reservado para el chat general");
+        return;
+    }
+    
+    if (ip.empty()) {
+        statusLabel->SetLabel("Error: La IP del servidor no puede estar vacía");
+        return;
+    }
+    
+    if (puerto.empty()) {
+        statusLabel->SetLabel("Error: El puerto no puede estar vacío");
+        return;
+    }
+    
+    statusLabel->SetLabel("Conectando...");
+
+    std::thread([this, usuario, ip, puerto]() {
+        try {
+            std::cout << "Iniciando conexión a " << ip << ":" << puerto << std::endl;
+
+            net::io_context ioc;
+            tcp::resolver resolver(ioc);
+            auto const results = resolver.resolve(ip, puerto);
+            
+            std::cout << "Dirección resuelta, conectando socket TCP..." << std::endl;
+    
+            tcp::socket socket(ioc);
+            net::connect(socket, results.begin(), results.end());
+            
+            std::cout << "Socket TCP conectado, creando stream WebSocket..." << std::endl;
+
+            auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
+
+            ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+
+            std::string host = ip;
+            std::string target = "/?name=" + usuario;
+            
+            std::cout << "Iniciando handshake WebSocket con host=" << host 
+                     << " y target=" << target << std::endl;
+    
+
+            ws->handshake(host, target);
+            std::cout << "Handshake WebSocket exitoso!" << std::endl;
+    
+
+            wxGetApp().CallAfter([this, ws, usuario]() {
+                ChatFrame* chatFrame = new ChatFrame(ws, usuario);
+                chatFrame->Show(true);
+                Close();
+            });
+        } 
+        catch (const beast::error_code& ec) {
+            wxGetApp().CallAfter([this, ec]() {
+                std::string errorMsg = "Error de conexión: " + ec.message();
+                statusLabel->SetLabel("Error: " + errorMsg);
+                std::cerr << errorMsg << std::endl;
+            });
+        }
+        catch (const std::exception& e) {
+            wxGetApp().CallAfter([this, e]() {
+                std::string errorMsg = e.what();
+                statusLabel->SetLabel("Error: " + errorMsg);
+                std::cerr << "Excepción: " << errorMsg << std::endl;
+            });
+        }
+        catch (...) {
+            wxGetApp().CallAfter([this]() {
+                statusLabel->SetLabel("Error: Excepción desconocida durante la conexión");
+                std::cerr << "Error desconocido durante la conexión" << std::endl;
+            });
+        }
+    }).detach();
+}
 };
 
 bool MyApp::OnInit() {

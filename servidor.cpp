@@ -514,7 +514,6 @@ public:
 
     void manejar_conexion(tcp::socket socket, const std::string& query_string) {
         try {
-
             std::string nombre_usuario = parse_nombre_usuario(query_string);
             
             if (nombre_usuario.empty()) {
@@ -541,7 +540,7 @@ public:
                 http::write(socket, res);
                 return;
             }
-
+            
             {
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
                 auto it = usuarios.find(nombre_usuario);
@@ -562,13 +561,20 @@ public:
             auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
 
             net::ip::address ip_address = ws->next_layer().remote_endpoint().address();
-            
+
             ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
-            ws->accept();
 
-            
+            try {
+                ws->accept();
+                logger.log("WebSocket handshake aceptado para: " + nombre_usuario);
+            } 
+            catch (const std::exception& e) {
+                logger.log("Error en WebSocket handshake para " + nombre_usuario + ": " + e.what());
+                return;
+            }
+
             logger.log("Conexión aceptada: " + nombre_usuario + " desde " + ip_address.to_string());
-
+            
             {
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
                 auto it = usuarios.find(nombre_usuario);
@@ -578,10 +584,10 @@ public:
                     it->second->actualizar_actividad();
                     it->second->ip_address = ip_address;
                 } else {
-
                     usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
                 }
             }
+            
 
             std::vector<uint8_t> notificacion = {
                 SERVER_NEW_USER, 
@@ -605,7 +611,7 @@ public:
                     if (datos.empty()) {
                         continue;
                     }
-
+                    
                     switch (datos[0]) {
                         case CLIENT_LIST_USERS:
                             procesar_listar_usuarios(nombre_usuario);
@@ -692,17 +698,16 @@ int main(int argc, char* argv[]) {
         ChatServer servidor;
         servidor.set_timeout_inactividad(120);
         
-
         while (true) {
             tcp::socket socket{ioc};
             acceptor.accept(socket);
-
+            
             auto endpoint = socket.remote_endpoint();
             std::cout << "Nueva conexión desde " << endpoint.address().to_string() 
-                      << ":" << endpoint.port() << std::endl;
-
-            socket.set_option(tcp::socket::keep_alive(true));
+                     << ":" << endpoint.port() << std::endl;
             
+            socket.set_option(tcp::socket::keep_alive(true));
+
             try {
                 beast::flat_buffer buffer;
                 http::request<http::string_body> req;
@@ -712,7 +717,7 @@ int main(int argc, char* argv[]) {
                 
                 std::string query_string = extract_query_string(req.target());
                 std::cout << "Query string: " << query_string << std::endl;
-                
+
                 std::thread([&servidor](tcp::socket sock, std::string qs) {
                     servidor.manejar_conexion(std::move(sock), qs);
                 }, std::move(socket), query_string).detach();
