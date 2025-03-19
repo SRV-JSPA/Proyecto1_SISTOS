@@ -691,6 +691,7 @@ std::string extract_query_string(boost::string_view target) {
     return "";
 }
 
+
 int main(int argc, char* argv[]) {
     try {
         if (argc != 2) {
@@ -709,188 +710,207 @@ int main(int argc, char* argv[]) {
         ChatServer servidor;
         servidor.set_timeout_inactividad(120);
         
+
         while (true) {
+
             tcp::socket socket{ioc};
             acceptor.accept(socket);
             
             auto endpoint = socket.remote_endpoint();
             std::cout << "Nueva conexión desde " << endpoint.address().to_string() 
-                     << ":" << endpoint.port() << std::endl;
+                      << ":" << endpoint.port() << std::endl;
             
             socket.set_option(tcp::socket::keep_alive(true));
-
-            http::request<http::string_body> req;
-            beast::flat_buffer buffer;
             
-            try {
-                http::read(socket, buffer, req);
-                
-                std::cout << "Petición HTTP recibida: " << req.target() << std::endl;
-                std::string query_string = extract_query_string(req.target());
-                std::cout << "Query string: " << query_string << std::endl;
 
-                std::string nombre_usuario = servidor.parse_nombre_usuario(query_string);
+            std::thread([&servidor, sock = std::move(socket)]() mutable {
+                try {
 
-                if (nombre_usuario.empty()) {
-                    http::response<http::string_body> res{http::status::bad_request, 11};
-                    res.set(http::field::server, "ChatServer");
-                    res.set(http::field::content_type, "text/plain");
-                    res.body() = "Nombre de usuario vacío";
-                    res.prepare_payload();
-                    http::write(socket, res);
-                    std::cout << "Conexión rechazada: nombre de usuario vacío" << std::endl;
-                    continue;
-                }
-                
-                if (nombre_usuario == "~") {
-                    http::response<http::string_body> res{http::status::bad_request, 11};
-                    res.set(http::field::server, "ChatServer");
-                    res.set(http::field::content_type, "text/plain");
-                    res.body() = "Nombre de usuario reservado";
-                    res.prepare_payload();
-                    http::write(socket, res);
-                    std::cout << "Conexión rechazada: nombre de usuario reservado" << std::endl;
-                    continue;
-                }
+                    beast::flat_buffer buffer;
+                    http::request<http::string_body> req;
+                    
 
-                bool usuario_ya_conectado = false;
-                {
-                    std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
-                    auto& usuarios = servidor.get_usuarios();
-                    auto it = usuarios.find(nombre_usuario);
-                    if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
-                        usuario_ya_conectado = true;
+                    http::read(sock, buffer, req);
+                    
+                    std::cout << "Thread: Petición HTTP recibida: " << req.target() << std::endl;
+                    std::string query_string = extract_query_string(req.target());
+                    std::cout << "Thread: Query string: " << query_string << std::endl;
+                    
+
+                    std::string nombre_usuario = servidor.parse_nombre_usuario(query_string);
+                    std::cout << "Thread: Procesando conexión para usuario: " << nombre_usuario << std::endl;
+                    
+
+                    if (nombre_usuario.empty()) {
+                        http::response<http::string_body> res{http::status::bad_request, 11};
+                        res.set(http::field::server, "ChatServer");
+                        res.set(http::field::content_type, "text/plain");
+                        res.body() = "Nombre de usuario vacío";
+                        res.prepare_payload();
+                        http::write(sock, res);
+                        std::cout << "Thread: Conexión rechazada: nombre de usuario vacío" << std::endl;
+                        return;
                     }
-                }
-                
-                if (usuario_ya_conectado) {
-                    http::response<http::string_body> res{http::status::bad_request, 11};
-                    res.set(http::field::server, "ChatServer");
-                    res.set(http::field::content_type, "text/plain");
-                    res.body() = "Usuario ya conectado";
-                    res.prepare_payload();
-                    http::write(socket, res);
-                    std::cout << "Conexión rechazada: usuario ya conectado: " << nombre_usuario << std::endl;
-                    continue;
-                }
-
-                auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
-
-                ws->accept(req);
-                std::cout << "WebSocket handshake aceptado para: " << nombre_usuario << std::endl;
-                
-
-                net::ip::address ip_address = ws->next_layer().remote_endpoint().address();
-                
-
-                {
-                    std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
-                    auto& usuarios = servidor.get_usuarios();
-                    auto it = usuarios.find(nombre_usuario);
-                    if (it != usuarios.end()) {
-                        it->second->ws_stream = ws;
-                        it->second->estado = EstadoUsuario::ACTIVO;
-                        it->second->actualizar_actividad();
-                        it->second->ip_address = ip_address;
-                    } else {
-                        usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
+                    
+                    if (nombre_usuario == "~") {
+                        http::response<http::string_body> res{http::status::bad_request, 11};
+                        res.set(http::field::server, "ChatServer");
+                        res.set(http::field::content_type, "text/plain");
+                        res.body() = "Nombre de usuario reservado";
+                        res.prepare_payload();
+                        http::write(sock, res);
+                        std::cout << "Thread: Conexión rechazada: nombre de usuario reservado" << std::endl;
+                        return;
                     }
-                }
-                
+                    
 
-                std::vector<uint8_t> notificacion = {
-                    SERVER_NEW_USER, 
-                    static_cast<uint8_t>(nombre_usuario.size())
-                };
-                notificacion.insert(notificacion.end(), nombre_usuario.begin(), nombre_usuario.end());
-                notificacion.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
-                
-                servidor.broadcast_mensaje(notificacion);
-                std::cout << "Usuario " << nombre_usuario << " conectado y notificado" << std::endl;
-                
+                    bool usuario_ya_conectado = false;
+                    {
+                        std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
+                        auto& usuarios = servidor.get_usuarios();
+                        auto it = usuarios.find(nombre_usuario);
+                        if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
+                            usuario_ya_conectado = true;
+                        }
+                    }
+                    
+                    if (usuario_ya_conectado) {
+                        http::response<http::string_body> res{http::status::bad_request, 11};
+                        res.set(http::field::server, "ChatServer");
+                        res.set(http::field::content_type, "text/plain");
+                        res.body() = "Usuario ya conectado";
+                        res.prepare_payload();
+                        http::write(sock, res);
+                        std::cout << "Thread: Conexión rechazada: usuario ya conectado: " << nombre_usuario << std::endl;
+                        return;
+                    }
+                    
 
-                std::thread([nombre_usuario, ws, &servidor]() {
+                    auto ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(sock));
+                    ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
+                    
                     try {
 
-                        beast::flat_buffer buffer;
-                        
-                        while (true) {
-                            try {
-                                ws->read(buffer);
-                                
-                                auto data = beast::buffers_to_string(buffer.data());
-                                std::vector<uint8_t> datos(data.begin(), data.end());
-                                buffer.consume(buffer.size());
-                                
-                                if (datos.empty()) {
-                                    continue;
-                                }
-                                
-                                switch (datos[0]) {
-                                    case CLIENT_LIST_USERS:
-                                        servidor.procesar_listar_usuarios(nombre_usuario);
-                                        break;
-                                        
-                                    case CLIENT_GET_USER:
-                                        servidor.procesar_obtener_usuario(nombre_usuario, datos);
-                                        break;
-                                        
-                                    case CLIENT_CHANGE_STATUS:
-                                        servidor.procesar_cambiar_estado(nombre_usuario, datos);
-                                        break;
-                                        
-                                    case CLIENT_SEND_MESSAGE:
-                                        servidor.procesar_enviar_mensaje(nombre_usuario, datos);
-                                        break;
-                                        
-                                    case CLIENT_GET_HISTORY:
-                                        servidor.procesar_obtener_historial(nombre_usuario, datos);
-                                        break;
-                                        
-                                    default:
-                                        std::cout << "Mensaje desconocido de " << nombre_usuario << ": tipo " 
-                                                 << std::to_string(datos[0]) << std::endl;
-                                        break;
-                                }
-                                
-                            } catch (const beast::error_code& ec) {
-                                if (ec == websocket::error::closed) {
-                                    std::cout << "Conexión cerrada por cliente: " << nombre_usuario << std::endl;
+                        ws->accept(req);
+                        std::cout << "Thread: WebSocket handshake aceptado para: " << nombre_usuario << std::endl;
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << "Thread: Error aceptando WebSocket para " << nombre_usuario 
+                                  << ": " << e.what() << std::endl;
+                        return;
+                    }
+                    
+
+                    net::ip::address ip_address;
+                    try {
+                        ip_address = ws->next_layer().remote_endpoint().address();
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << "Thread: Error obteniendo IP para " << nombre_usuario 
+                                  << ": " << e.what() << std::endl;
+
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
+                        auto& usuarios = servidor.get_usuarios();
+                        auto it = usuarios.find(nombre_usuario);
+                        if (it != usuarios.end()) {
+                            it->second->ws_stream = ws;
+                            it->second->estado = EstadoUsuario::ACTIVO;
+                            it->second->actualizar_actividad();
+                            it->second->ip_address = ip_address;
+                        } else {
+                            usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
+                        }
+                    }
+                    
+
+                    std::vector<uint8_t> notificacion = {
+                        SERVER_NEW_USER, 
+                        static_cast<uint8_t>(nombre_usuario.size())
+                    };
+                    notificacion.insert(notificacion.end(), nombre_usuario.begin(), nombre_usuario.end());
+                    notificacion.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
+                    
+                    servidor.broadcast_mensaje(notificacion);
+                    std::cout << "Thread: Usuario " << nombre_usuario << " conectado y notificado" << std::endl;
+
+                    beast::flat_buffer msg_buffer;
+                    
+                    while (true) {
+                        try {
+                            ws->read(msg_buffer);
+                            
+                            auto data = beast::buffers_to_string(msg_buffer.data());
+                            std::vector<uint8_t> datos(data.begin(), data.end());
+                            msg_buffer.consume(msg_buffer.size());
+                            
+                            if (datos.empty()) {
+                                continue;
+                            }
+                            
+                            switch (datos[0]) {
+                                case CLIENT_LIST_USERS:
+                                    servidor.procesar_listar_usuarios(nombre_usuario);
                                     break;
-                                } else {
-                                    std::cout << "Error leyendo de cliente " << nombre_usuario << ": " << ec.message() << std::endl;
+                                    
+                                case CLIENT_GET_USER:
+                                    servidor.procesar_obtener_usuario(nombre_usuario, datos);
                                     break;
-                                }
-                            } catch (const std::exception& e) {
-                                std::cout << "Error procesando mensaje de " << nombre_usuario << ": " << e.what() << std::endl;
+                                    
+                                case CLIENT_CHANGE_STATUS:
+                                    servidor.procesar_cambiar_estado(nombre_usuario, datos);
+                                    break;
+                                    
+                                case CLIENT_SEND_MESSAGE:
+                                    servidor.procesar_enviar_mensaje(nombre_usuario, datos);
+                                    break;
+                                    
+                                case CLIENT_GET_HISTORY:
+                                    servidor.procesar_obtener_historial(nombre_usuario, datos);
+                                    break;
+                                    
+                                default:
+                                    std::cout << "Thread " << nombre_usuario << ": Mensaje desconocido tipo " 
+                                              << (int)datos[0] << std::endl;
+                                    break;
+                            }
+                            
+                        } catch (const beast::error_code& ec) {
+                            if (ec == websocket::error::closed) {
+                                std::cout << "Thread: Conexión cerrada por cliente: " << nombre_usuario << std::endl;
+                                break;
+                            } else {
+                                std::cout << "Thread: Error leyendo de cliente " << nombre_usuario << ": " << ec.message() << std::endl;
                                 break;
                             }
+                        } catch (const std::exception& e) {
+                            std::cout << "Thread: Error procesando mensaje de " << nombre_usuario << ": " << e.what() << std::endl;
+                            break;
                         }
-
-                        {
-                            std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
-                            auto& usuarios = servidor.get_usuarios();
-                            auto it = usuarios.find(nombre_usuario);
-                            if (it != usuarios.end()) {
-                                it->second->estado = EstadoUsuario::DESCONECTADO;
-                                std::cout << "Usuario " << nombre_usuario << " marcado como DESCONECTADO" << std::endl;
-                            }
-                        }
-
-                        std::vector<uint8_t> notificacion_desconexion = servidor.crear_mensaje_cambio_estado(
-                            nombre_usuario, EstadoUsuario::DESCONECTADO);
-                        servidor.broadcast_mensaje(notificacion_desconexion);
-                        
-                    } catch (const std::exception& e) {
-                        std::cout << "Error en manejo de conexión de " << nombre_usuario << ": " << e.what() << std::endl;
                     }
-                }).detach();
-                
-            } catch (const beast::error_code& ec) {
-                std::cerr << "Error en la lectura HTTP: " << ec.message() << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "Excepción en la lectura HTTP: " << e.what() << std::endl;
-            }
+                    
+
+                    {
+                        std::lock_guard<std::mutex> lock(servidor.get_usuarios_mutex());
+                        auto& usuarios = servidor.get_usuarios();
+                        auto it = usuarios.find(nombre_usuario);
+                        if (it != usuarios.end()) {
+                            it->second->estado = EstadoUsuario::DESCONECTADO;
+                            std::cout << "Thread: Usuario " << nombre_usuario << " marcado como DESCONECTADO" << std::endl;
+                        }
+                    }
+                    
+
+                    std::vector<uint8_t> notificacion_desconexion = servidor.crear_mensaje_cambio_estado(
+                        nombre_usuario, EstadoUsuario::DESCONECTADO);
+                    servidor.broadcast_mensaje(notificacion_desconexion);
+                    
+                } catch (const std::exception& e) {
+                    std::cerr << "Thread: Error en manejo de conexión: " << e.what() << std::endl;
+                }
+            }).detach();
         }
     } catch (const std::exception& e) {
         std::cerr << "Error en el servidor: " << e.what() << std::endl;
