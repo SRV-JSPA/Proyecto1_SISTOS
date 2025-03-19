@@ -198,6 +198,7 @@ private:
             if (pos != std::string::npos) {
                 nombre = nombre.substr(0, pos);
             }
+            boost::replace_all(nombre, "%20", " ");
         }
         return nombre;
     }
@@ -667,7 +668,7 @@ public:
 
 std::string extract_query_string(boost::string_view target) {
     auto pos = target.find('?');
-    if (pos != target.npos) {
+    if (pos != boost::string_view::npos) {
         return std::string(target.substr(pos + 1));
     }
     return "";
@@ -682,32 +683,49 @@ int main(int argc, char* argv[]) {
         
         int puerto = std::stoi(argv[1]);
         
-        net::io_context ioc;
-        tcp::acceptor acceptor(ioc, tcp::endpoint(tcp::v4(), puerto));
+        net::io_context ioc{1};
+        tcp::acceptor acceptor{ioc, {tcp::v4(), static_cast<unsigned short>(puerto)}};
         acceptor.set_option(boost::asio::socket_base::reuse_address(true));
         
         std::cout << "Servidor iniciado en puerto " << puerto << std::endl;
         
         ChatServer servidor;
-
         servidor.set_timeout_inactividad(120);
         
-        while (true) {
 
-            tcp::socket socket(ioc);
+        while (true) {
+            tcp::socket socket{ioc};
             acceptor.accept(socket);
 
-            beast::flat_buffer buffer;
-            http::request<http::string_body> req;
-            http::read(socket, buffer, req);
+            auto endpoint = socket.remote_endpoint();
+            std::cout << "Nueva conexión desde " << endpoint.address().to_string() 
+                      << ":" << endpoint.port() << std::endl;
 
-            std::string query_string = extract_query_string(req.target());
-
-            std::thread([&servidor](tcp::socket sock, std::string qs) {
-                servidor.manejar_conexion(std::move(sock), qs);
-            }, std::move(socket), query_string).detach();
+            socket.set_option(tcp::socket::keep_alive(true));
+            
+            try {
+                beast::flat_buffer buffer;
+                http::request<http::string_body> req;
+                http::read(socket, buffer, req);
+                
+                std::cout << "Petición HTTP recibida: " << req.target() << std::endl;
+                
+                std::string query_string = extract_query_string(req.target());
+                std::cout << "Query string: " << query_string << std::endl;
+                
+                std::thread([&servidor](tcp::socket sock, std::string qs) {
+                    servidor.manejar_conexion(std::move(sock), qs);
+                }, std::move(socket), query_string).detach();
+            }
+            catch (const beast::error_code& ec) {
+                std::cerr << "Error en la lectura HTTP: " << ec.message() << std::endl;
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Excepción en la lectura HTTP: " << e.what() << std::endl;
+            }
         }
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e) {
         std::cerr << "Error en el servidor: " << e.what() << std::endl;
         return 1;
     }
