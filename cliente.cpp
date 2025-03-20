@@ -358,11 +358,13 @@ void ChatFrame::OnAddContact(wxCommandEvent&) {
 
 void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
     wxString selectedItem = contactList->GetString(evt.GetSelection());
-
-
     wxString contactName = selectedItem.AfterFirst(']').Trim(true).Trim(false);
-    
-    chatPartner_ = contactName.ToStdString();
+
+    if (contactName == "Chat General") {
+        chatPartner_ = "~";  
+    } else {
+        chatPartner_ = contactName.ToStdString();
+    }
 
     wxString titleText = wxString("Chat con: ") + 
                       (chatPartner_ == "~" ? wxString("Chat General") : wxString(chatPartner_));
