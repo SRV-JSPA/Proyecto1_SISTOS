@@ -96,12 +96,14 @@ private:
     wxButton* refreshUsersButton;
     wxChoice* statusChoice;
     wxStaticText* chatTitle;
+    wxStaticText* statusText;
     
     std::shared_ptr<websocket::stream<tcp::socket>> ws_;
     std::string usuario_;
     std::string chatPartner_;
     bool running_;
     std::mutex chatHistoryMutex_;
+    EstadoUsuario currentStatus_;
 
     std::unordered_map<std::string, ContactInfo> contacts_;
     std::unordered_map<std::string, std::vector<std::string>> chatHistory_;
@@ -132,13 +134,16 @@ private:
     void ProcessHistoryMessage(const std::vector<uint8_t>& data);
 
     void UpdateContactListUI();
+    void UpdateStatusDisplay();
+    bool CanSendMessage() const;
 };
 
 ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario)
     : wxFrame(nullptr, wxID_ANY, "Chat - " + usuario, wxDefaultPosition, wxSize(800, 600)), 
       ws_(ws), 
       usuario_(usuario),
-      running_(true) {
+      running_(true),
+      currentStatus_(EstadoUsuario::ACTIVO) {
 
 
     contacts_.insert({"~", ContactInfo("Chat General", EstadoUsuario::ACTIVO)});
@@ -158,6 +163,10 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     statusSizer->Add(statusChoice, 1, wxALL, 5);
     
     leftSizer->Add(statusSizer, 0, wxEXPAND);
+
+    statusText = new wxStaticText(panel, wxID_ANY, "Estado actual: ACTIVO");
+    statusText->SetForegroundColour(wxColour(0, 128, 0)); 
+    leftSizer->Add(statusText, 0, wxALL, 5);
 
     leftSizer->Add(new wxStaticText(panel, wxID_ANY, "Contactos:"), 0, wxALL, 5);
     contactList = new wxListBox(panel, wxID_ANY);
@@ -255,9 +264,19 @@ void ChatFrame::RequestChatHistory() {
     }
 }
 
+bool ChatFrame::CanSendMessage() const {
+    return currentStatus_ == EstadoUsuario::ACTIVO || currentStatus_ == EstadoUsuario::INACTIVO;
+}
+
 void ChatFrame::OnSend(wxCommandEvent&) {
     if (chatPartner_.empty()) {
         wxMessageBox("Seleccione un contacto primero", "Aviso", wxOK | wxICON_INFORMATION);
+        return;
+    }
+    
+    if (!CanSendMessage()) {
+        wxMessageBox("No puedes enviar mensajes en estado OCUPADO o DESCONECTADO",
+                    "Aviso", wxOK | wxICON_WARNING);
         return;
     }
 
@@ -403,6 +422,41 @@ void ChatFrame::OnRefreshUsers(wxCommandEvent&) {
     RequestUserList();
 }
 
+void ChatFrame::UpdateStatusDisplay() {
+    wxString statusString;
+    wxColour statusColor;
+    
+    switch (currentStatus_) {
+        case EstadoUsuario::ACTIVO:
+            statusString = "ACTIVO";
+            statusColor = wxColour(0, 128, 0);  
+            break;
+        case EstadoUsuario::OCUPADO:
+            statusString = "OCUPADO";
+            statusColor = wxColour(255, 0, 0);  
+            break;
+        case EstadoUsuario::INACTIVO:
+            statusString = "INACTIVO";
+            statusColor = wxColour(128, 128, 0); 
+            break;
+        case EstadoUsuario::DESCONECTADO:
+            statusString = "DESCONECTADO";
+            statusColor = wxColour(128, 128, 128); 
+            break;
+    }
+    
+    statusText->SetLabel("Estado actual: " + statusString);
+    statusText->SetForegroundColour(statusColor);
+    
+
+    auto it = contacts_.find(usuario_);
+    if (it != contacts_.end()) {
+        it->second.estado = currentStatus_;
+    }
+    
+    UpdateContactListUI();
+}
+
 void ChatFrame::OnChangeStatus(wxCommandEvent&) {
     int selection = statusChoice->GetSelection();
     EstadoUsuario newStatus;
@@ -417,6 +471,12 @@ void ChatFrame::OnChangeStatus(wxCommandEvent&) {
     try {
         std::vector<uint8_t> request = CreateChangeStatusMessage(newStatus);
         ws_->write(net::buffer(request));
+
+        currentStatus_ = newStatus;
+        UpdateStatusDisplay();
+        
+        std::cout << "Enviada solicitud de cambio de estado a: " << static_cast<int>(newStatus) << std::endl;
+        
     } catch (const std::exception& e) {
         wxMessageBox("Error al cambiar estado: " + std::string(e.what()),
                    "Error", wxOK | wxICON_ERROR);
@@ -503,10 +563,17 @@ void ChatFrame::ProcessListUsersMessage(const std::vector<uint8_t>& data) {
     uint8_t numUsers = data[1];
     size_t offset = 2;
 
-
     ContactInfo chatGeneral = contacts_["~"];
+    EstadoUsuario currentUserStatus = EstadoUsuario::ACTIVO;
+    auto it = contacts_.find(usuario_);
+    if (it != contacts_.end()) {
+        currentUserStatus = it->second.estado;
+    }
+    
     contacts_.clear();
     contacts_["~"] = chatGeneral;
+
+    contacts_[usuario_] = ContactInfo(usuario_, currentUserStatus);
     
     for (uint8_t i = 0; i < numUsers; i++) {
         if (offset >= data.size()) break;
@@ -521,11 +588,15 @@ void ChatFrame::ProcessListUsersMessage(const std::vector<uint8_t>& data) {
         
         EstadoUsuario status = static_cast<EstadoUsuario>(data[offset++]);
 
+        if (username == usuario_) {
+            currentStatus_ = status;
+        }
 
         contacts_.emplace(username, ContactInfo(username, status));
     }
     
     wxGetApp().CallAfter([this]() {
+        UpdateStatusDisplay();
         UpdateContactListUI();
     });
 }
@@ -593,15 +664,20 @@ void ChatFrame::ProcessStatusChangeMessage(const std::vector<uint8_t>& data) {
     
     EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + userLen]);
 
+    std::cout << "Recibido cambio de estado para " << username << " a estado " << static_cast<int>(status) << std::endl;
+
     auto it = contacts_.find(username);
     if (it != contacts_.end()) {
         it->second.estado = status;
     } else {
         contacts_.emplace(username, ContactInfo(username, status));
     }
+
+    if (username == usuario_) {
+        currentStatus_ = status;
+    }
     
     wxGetApp().CallAfter([this, username, status]() {
-        UpdateContactListUI();
         if (username == usuario_) {
             switch (status) {
                 case EstadoUsuario::ACTIVO:
@@ -616,6 +692,9 @@ void ChatFrame::ProcessStatusChangeMessage(const std::vector<uint8_t>& data) {
                 default:
                     break;
             }
+            UpdateStatusDisplay();
+        } else {
+            UpdateContactListUI();
         }
     });
 }
