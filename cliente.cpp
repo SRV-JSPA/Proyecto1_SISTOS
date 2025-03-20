@@ -142,6 +142,7 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
 
 
     contacts_.insert({"~", ContactInfo("Chat General", EstadoUsuario::ACTIVO)});
+    contacts_.insert({usuario_, ContactInfo(usuario_, EstadoUsuario::ACTIVO)});
     
     wxPanel* panel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -599,8 +600,23 @@ void ChatFrame::ProcessStatusChangeMessage(const std::vector<uint8_t>& data) {
         contacts_.emplace(username, ContactInfo(username, status));
     }
     
-    wxGetApp().CallAfter([this]() {
+    wxGetApp().CallAfter([this, username, status]() {
         UpdateContactListUI();
+        if (username == usuario_) {
+            switch (status) {
+                case EstadoUsuario::ACTIVO:
+                    statusChoice->SetSelection(0);
+                    break;
+                case EstadoUsuario::OCUPADO:
+                    statusChoice->SetSelection(1);
+                    break;
+                case EstadoUsuario::INACTIVO:
+                    statusChoice->SetSelection(2);
+                    break;
+                default:
+                    break;
+            }
+        }
     });
 }
 
