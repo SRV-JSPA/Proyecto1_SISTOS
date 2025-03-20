@@ -137,6 +137,8 @@ private:
     void UpdateStatusDisplay();
     bool CanSendMessage() const;
     bool IsWebSocketConnected();
+    bool ReiniciarConexion();
+    bool VerificarConexion();
 };
 
 ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario)
@@ -291,10 +293,8 @@ void ChatFrame::OnSend(wxCommandEvent&) {
         return;
     }
 
-    if (!IsWebSocketConnected()) {
-        wxMessageBox("No hay conexión con el servidor. Intente reconectarse.",
-                    "Error de Conexión", wxOK | wxICON_ERROR);
-        return;
+    if (!VerificarConexion()) {
+        return;  
     }
 
     std::string message = messageInput->GetValue().ToStdString();
@@ -304,26 +304,24 @@ void ChatFrame::OnSend(wxCommandEvent&) {
         std::vector<uint8_t> data = CreateSendMessageMessage(chatPartner_, message);
         if (data.empty()) return; 
 
-        std::thread([this, data, message]() {
-            try {
-                beast::error_code ec;
-                ws_->write(net::buffer(data), ec);
-                
-                if (ec) {
-                    throw std::runtime_error("Error al enviar mensaje: " + ec.message());
-                }
-                
-                wxGetApp().CallAfter([this]() {
+        try {
+            ws_->write(net::buffer(data));
+            messageInput->Clear();
+        } catch (const std::exception& e) {
+            if (ReiniciarConexion()) {
+                try {
+                    ws_->write(net::buffer(data));
                     messageInput->Clear();
-                });
-            } catch (const std::exception& e) {
-                wxGetApp().CallAfter([this, e]() {
-                    wxMessageBox("Error al enviar mensaje: " + std::string(e.what()),
+                    wxMessageBox("Mensaje enviado después de reconectar", "Reconexión Exitosa", wxOK | wxICON_INFORMATION);
+                } catch (const std::exception& e2) {
+                    wxMessageBox("No se pudo enviar el mensaje: " + std::string(e2.what()),
                                 "Error", wxOK | wxICON_ERROR);
-                });
+                }
+            } else {
+                wxMessageBox("Error al enviar mensaje: " + std::string(e.what()),
+                            "Error", wxOK | wxICON_ERROR);
             }
-        }).detach();
-        
+        }
     } catch (const std::exception& e) {
         wxMessageBox("Error al preparar envío de mensaje: " + std::string(e.what()),
                     "Error", wxOK | wxICON_ERROR);
@@ -436,6 +434,10 @@ void ChatFrame::OnCheckUserInfo(wxCommandEvent&) {
         return;
     }
 
+    if (!VerificarConexion()) {
+        return; 
+    }
+
     wxString selectedItem = contactList->GetString(contactList->GetSelection());
     wxString contactName = selectedItem.AfterFirst(']').Trim(true).Trim(false);
     std::string username = contactName.ToStdString();
@@ -449,8 +451,18 @@ void ChatFrame::OnCheckUserInfo(wxCommandEvent&) {
         std::vector<uint8_t> request = CreateGetUserMessage(username);
         ws_->write(net::buffer(request));
     } catch (const std::exception& e) {
-        wxMessageBox("Error al solicitar información de usuario: " + std::string(e.what()),
-                   "Error", wxOK | wxICON_ERROR);
+        if (ReiniciarConexion()) {
+            try {
+                std::vector<uint8_t> request = CreateGetUserMessage(username);
+                ws_->write(net::buffer(request));
+            } catch (const std::exception& e2) {
+                wxMessageBox("No se pudo obtener información del usuario: " + std::string(e2.what()),
+                          "Error", wxOK | wxICON_ERROR);
+            }
+        } else {
+            wxMessageBox("Error al solicitar información de usuario: " + std::string(e.what()),
+                       "Error", wxOK | wxICON_ERROR);
+        }
     }
 }
 
@@ -504,42 +516,86 @@ void ChatFrame::OnChangeStatus(wxCommandEvent&) {
         default: newStatus = EstadoUsuario::ACTIVO; break;
     }
     
-    std::cout << "Intentando cambiar estado a: " << static_cast<int>(newStatus) << std::endl;
+    EstadoUsuario oldStatus = currentStatus_;
     
     try {
-        std::vector<uint8_t> request = CreateChangeStatusMessage(newStatus);
 
-        EstadoUsuario oldStatus = currentStatus_;
+        std::vector<uint8_t> message = {
+            CLIENT_CHANGE_STATUS, 
+            static_cast<uint8_t>(usuario_.size())
+        };
+        message.insert(message.end(), usuario_.begin(), usuario_.end());
+        message.push_back(static_cast<uint8_t>(newStatus));
 
         currentStatus_ = newStatus;
         UpdateStatusDisplay();
 
-        std::thread([this, request, oldStatus, newStatus]() {
-            try {
-                beast::error_code ec;
-                ws_->write(net::buffer(request), ec);
-                
-                if (ec) {
-                    throw std::runtime_error("Error al enviar mensaje: " + ec.message());
-                }
-                
-                std::cout << "Mensaje de cambio de estado enviado correctamente" << std::endl;
-            } 
-            catch (const std::exception& e) {
-                wxGetApp().CallAfter([this, e, oldStatus]() {
-                    wxMessageBox("Error al cambiar estado: " + std::string(e.what()), 
-                               "Error", wxOK | wxICON_ERROR);
+        ws_->write(net::buffer(message));
 
-                    currentStatus_ = oldStatus;
-                    UpdateStatusDisplay();
-                });
-            }
-        }).detach();
+        std::vector<uint8_t> requestUsers = {CLIENT_LIST_USERS};
+        ws_->write(net::buffer(requestUsers));
+        
+        std::cout << "Mensaje de cambio de estado enviado correctamente" << std::endl;
         
     } catch (const std::exception& e) {
-        wxMessageBox("Error al preparar cambio de estado: " + std::string(e.what()),
+        std::cerr << "Error al cambiar estado: " << e.what() << std::endl;
+
+        currentStatus_ = oldStatus;
+        UpdateStatusDisplay();
+        
+        wxMessageBox("Error al cambiar estado: " + std::string(e.what()), 
                    "Error", wxOK | wxICON_ERROR);
     }
+}
+
+bool ChatFrame::ReiniciarConexion() {
+    try {
+
+        ws_->close(websocket::close_code::normal);
+
+        net::io_context ioc;
+        tcp::resolver resolver(ioc);
+
+        std::string ip = ws_->next_layer().remote_endpoint().address().to_string();
+        unsigned short puerto = ws_->next_layer().remote_endpoint().port();
+        
+        auto const results = resolver.resolve(ip, std::to_string(puerto));
+        
+        tcp::socket socket(ioc);
+        net::connect(socket, results);
+        
+        auto new_ws = std::make_shared<websocket::stream<tcp::socket>>(std::move(socket));
+        new_ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+        
+        std::string host = ip;
+        std::string target = "/?name=" + usuario_;
+        
+        new_ws->handshake(host, target);
+
+        ws_ = new_ws;
+        RequestUserList();
+        
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error al reiniciar conexión: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool ChatFrame::VerificarConexion() {
+    if (!IsWebSocketConnected()) {
+        bool reconectado = ReiniciarConexion();
+        if (reconectado) {
+            wxMessageBox("La conexión se ha restablecido con éxito.", 
+                       "Reconexión", wxOK | wxICON_INFORMATION);
+            return true;
+        } else {
+            wxMessageBox("No se pudo restablecer la conexión con el servidor.", 
+                       "Error de Conexión", wxOK | wxICON_ERROR);
+            return false;
+        }
+    }
+    return true;
 }
 
 std::vector<uint8_t> ChatFrame::CreateListUsersMessage() {
