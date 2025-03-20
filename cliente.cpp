@@ -273,9 +273,7 @@ bool ChatFrame::IsWebSocketConnected() {
     if (!ws_) return false;
     
     try {
-        beast::error_code ec;
-        ws_->get_executor().context().poll();
-        return !ec;
+        return ws_->is_open() && ws_->next_layer().is_open();
     } catch (...) {
         return false;
     }
