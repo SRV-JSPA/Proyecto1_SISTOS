@@ -742,7 +742,7 @@ int main(int argc, char* argv[]) {
                     
 
                     if (nombre_usuario.empty()) {
-                        http::response<http::string_body>http::response<http::string_body> res{http::status::bad_request, 11};
+                        http::response<http::string_body> res{http::status::bad_request, 11};
                         res.set(http::field::server, "ChatServer");
                         res.set(http::field::content_type, "text/plain");
                         res.body() = "Nombre de usuario vacío";
