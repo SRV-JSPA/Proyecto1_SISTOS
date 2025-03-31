@@ -290,7 +290,9 @@ void ChatFrame::OnSend(wxCommandEvent&) {
         return;
     }
     
-    if (!canSendMessages_ && !forceCanSend_) {
+    bool canSend = (currentStatus_ == EstadoUsuario::ACTIVO || currentStatus_ == EstadoUsuario::INACTIVO || forceCanSend_);
+    
+    if (!canSend) {
         wxMessageBox("No puedes enviar mensajes en tu estado actual",
                     "Aviso", wxOK | wxICON_WARNING);
         return;
@@ -307,8 +309,14 @@ void ChatFrame::OnSend(wxCommandEvent&) {
         std::vector<uint8_t> data = CreateSendMessageMessage(chatPartner_, message);
         if (data.empty()) return;
 
+        std::cout << "Enviando mensaje a: " << chatPartner_ << ", contenido: " << message << std::endl;
+
         ws_->write(net::buffer(data));
         messageInput->Clear();
+        
+        std::string formattedMessage = usuario_ + ": " + message;
+        chatBox->AppendText(formattedMessage + "\n");
+        
     } catch (const std::exception& e) {
         if (ReiniciarConexion()) {
             try {
@@ -509,6 +517,8 @@ void ChatFrame::UpdateStatusDisplay() {
     UpdateContactListUI();
 }
 
+//prueba
+
 void ChatFrame::OnChangeStatus(wxCommandEvent&) {
     int selection = statusChoice->GetSelection();
     EstadoUsuario newStatus;
@@ -532,18 +542,53 @@ void ChatFrame::OnChangeStatus(wxCommandEvent&) {
             break;
     }
     
+    currentStatus_ = newStatus;
+    
+    wxString statusStr;
+    wxColour statusColor;
+    
+    switch (newStatus) {
+        case EstadoUsuario::ACTIVO:
+            statusStr = "ACTIVO";
+            statusColor = wxColour(0, 128, 0);
+            break;
+        case EstadoUsuario::OCUPADO:
+            statusStr = "OCUPADO";
+            statusColor = wxColour(255, 0, 0);
+            break;
+        case EstadoUsuario::INACTIVO:
+            statusStr = "INACTIVO";
+            statusColor = wxColour(128, 128, 0);
+            break;
+        default:
+            statusStr = "DESCONOCIDO";
+            statusColor = wxColour(128, 128, 128);
+            break;
+    }
+    
+    statusText->SetLabel("Estado actual: " + statusStr);
+    statusText->SetForegroundColour(statusColor);
+    
+    messageInput->Enable(canSendMessages_);
+    sendButton->Enable(canSendMessages_);
+    
+    auto it = contacts_.find(usuario_);
+    if (it != contacts_.end()) {
+        it->second.estado = newStatus;
+    }
+    UpdateContactListUI();
+    
     try {
-        currentStatus_ = newStatus;
-        UpdateStatusDisplay();
-        
-        auto it = contacts_.find(usuario_);
-        if (it != contacts_.end()) {
-            it->second.estado = newStatus;
-        }
-        UpdateContactListUI();
-        
         std::vector<uint8_t> message = CreateChangeStatusMessage(newStatus);
         ws_->write(net::buffer(message));
+        
+        std::cout << "Enviando solicitud de cambio de estado a: " << static_cast<int>(newStatus) << std::endl;
+        std::cout << "Estado local actualizado a: " << static_cast<int>(currentStatus_) << std::endl;
+        std::cout << "Puede enviar mensajes: " << (canSendMessages_ ? "SÍ" : "NO") << std::endl;
+        
+        wxMessageBox("Estado cambiado a: " + statusStr + "\n" +
+                    "Puedes enviar mensajes: " + (canSendMessages_ ? "SÍ" : "NO"),
+                     "Cambio de estado", wxOK | wxICON_INFORMATION);
     } catch (const std::exception& e) {
         std::cerr << "Error al enviar cambio de estado: " << e.what() << std::endl;
         wxMessageBox("Error al cambiar estado: " + std::string(e.what()), 
