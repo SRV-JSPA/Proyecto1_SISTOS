@@ -361,7 +361,7 @@ public:
 
     //prueba
 
-    void procesar_cambiar_estado(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) { //prueba
+    void procesar_cambiar_estado(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 3) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
             return;
@@ -403,7 +403,7 @@ public:
         broadcast_mensaje(mensaje);
         
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
-    }//prueba
+    }
 
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
