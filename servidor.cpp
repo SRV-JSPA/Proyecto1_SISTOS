@@ -479,6 +479,7 @@ public:
                 if (it_dest->second->puede_recibir_mensajes()) {
                     try {
                         it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
+                        it_dest->second->actualizar_actividad(); //quitar si no funciona, esto es una prueba
                         enviado = true;
                     } catch (...) {}
                 }
