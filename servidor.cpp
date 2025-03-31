@@ -382,8 +382,6 @@ public:
         logger.log("Cliente " + nombre_cliente + " solicita cambiar estado de " + 
                   nombre_usuario + " a " + std::to_string(estado));
 
-        logger.log("Comparando nombre_cliente = [" + nombre_cliente + "] con nombre_usuario = [" + nombre_usuario + "]");//prueba
-
         if (nombre_cliente != nombre_usuario) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
             return;
@@ -396,26 +394,12 @@ public:
             return;
         }
 
-        //it->second->estado = static_cast<EstadoUsuario>(estado);
-        //it->second->actualizar_actividad();
-
-        //auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
-        //broadcast_mensaje(mensaje);
-
-        
-        
-        EstadoUsuario estado_nuevo = static_cast<EstadoUsuario>(estado);//prueba
-        it->second->estado = estado_nuevo;
+        it->second->estado = static_cast<EstadoUsuario>(estado);
         it->second->actualizar_actividad();
 
-        logger.log("Servidor: estado actualizado de " + nombre_usuario + " a " + std::to_string(static_cast<int>(estado_nuevo)));
-
-        auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, estado_nuevo);
+        auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
         broadcast_mensaje(mensaje);
 
-        logger.log("Servidor: cambio de estado enviado a todos los clientes");
-
-    }//prueba
 
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
@@ -492,23 +476,13 @@ public:
                     it_dest->second->historial_mensajes.pop_front();
                 }
 
-                //if (it_dest->second->puede_recibir_mensajes()) {
-                    //try {
-                        //it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
-                        //enviado = true;
-                    //} catch (...) {}
-                //}
-                
-
-
-                if (it_dest->second->puede_recibir_mensajes()) {//prueba
+                if (it_dest->second->puede_recibir_mensajes()) {
                     try {
                         it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
-                        it_dest->second->actualizar_actividad(); //prueba a ver si funciona PIPIPI
                         enviado = true;
                     } catch (...) {}
-                }                
-            }//pruebaaa
+                }
+
             
             enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
             
