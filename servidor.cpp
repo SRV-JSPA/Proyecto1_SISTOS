@@ -382,6 +382,8 @@ public:
         logger.log("Cliente " + nombre_cliente + " solicita cambiar estado de " + 
                   nombre_usuario + " a " + std::to_string(estado));
 
+        logger.log("Comparando nombre_cliente = [" + nombre_cliente + "] con nombre_usuario = [" + nombre_usuario + "]");//prueba
+
         if (nombre_cliente != nombre_usuario) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
             return;
