@@ -120,7 +120,7 @@ public:
     }
     
     bool puede_recibir_mensajes() const {
-        return estado == EstadoUsuario::ACTIVO || estado == EstadoUsuario::INACTIVO;
+        return estado != EstadoUsuario::DESCONECTADO && estado != EstadoUsuario::OCUPADO;
     }
     
     void actualizar_actividad() {
@@ -397,11 +397,9 @@ public:
         it->second->actualizar_actividad();
     
         auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
-        
-        logger.log("Cambiando estado de " + nombre_usuario + " a " + std::to_string(estado) + 
-                  " - Broadcast a todos los usuarios");
-        
         broadcast_mensaje(mensaje);
+        
+        enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
 
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
@@ -453,28 +451,15 @@ public:
             }
 
             broadcast_mensaje(mensaje_respuesta);
-            logger.log("Mensaje de " + nombre_cliente + " enviado a chat general");
         } else {
             bool enviado = false;
-            bool puede_recibir = false;
             {
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
 
                 auto it_dest = usuarios.find(destino);
                 if (it_dest == usuarios.end() || it_dest->second->estado == EstadoUsuario::DESCONECTADO) {
                     enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
-                    logger.log("Error: Intento de enviar mensaje a usuario desconectado: " + destino);
                     return;
-                }
-
-                puede_recibir = it_dest->second->puede_recibir_mensajes();
-                logger.log("Estado del destinatario " + destino + ": " + 
-                          std::to_string(static_cast<int>(it_dest->second->estado)) + 
-                          ", Puede recibir mensajes: " + (puede_recibir ? "SÍ" : "NO"));
-                          
-                if (it_dest->second->estado == EstadoUsuario::ACTIVO) {
-                    puede_recibir = true;
-                    logger.log("Destinatario está ACTIVO, forzando recepción de mensajes");
                 }
 
                 auto it_origen = usuarios.find(nombre_cliente);
@@ -490,21 +475,18 @@ public:
                     it_dest->second->historial_mensajes.pop_front();
                 }
 
-                if (puede_recibir) {
+                if (it_dest->second->puede_recibir_mensajes()) {
                     try {
                         it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
                         enviado = true;
-                    } catch (const std::exception& e) {
-                        logger.log("Error enviando mensaje a " + destino + ": " + e.what());
-                    }
+                    } catch (...) {}
                 }
             }
             
             enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
             
             logger.log("Mensaje de " + nombre_cliente + " a " + destino + 
-                       (enviado ? " enviado correctamente" : 
-                        (puede_recibir ? " no enviado (error de conexión)" : " no enviado (usuario ocupado)")));
+                       (enviado ? " enviado" : " no enviado (usuario ocupado)"));
         }
     }
     
