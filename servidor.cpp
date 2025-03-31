@@ -471,6 +471,11 @@ public:
                 logger.log("Estado del destinatario " + destino + ": " + 
                           std::to_string(static_cast<int>(it_dest->second->estado)) + 
                           ", Puede recibir mensajes: " + (puede_recibir ? "SÍ" : "NO"));
+                          
+                if (it_dest->second->estado == EstadoUsuario::ACTIVO) {
+                    puede_recibir = true;
+                    logger.log("Destinatario está ACTIVO, forzando recepción de mensajes");
+                }
 
                 auto it_origen = usuarios.find(nombre_cliente);
                 if (it_origen != usuarios.end()) {
