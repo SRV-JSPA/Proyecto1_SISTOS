@@ -359,7 +359,6 @@ public:
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
 
-    //prueba mensaje 2
     void procesar_cambiar_estado(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 3) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
@@ -400,13 +399,60 @@ public:
     
         auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
         broadcast_mensaje(mensaje);
-     
+
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
-        } 
 
-        //prueba3
-        else {
+    void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
+        if (datos.size() < 2) {
+            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_EMPTY_MESSAGE));
+            return;
+        }
+        
+        uint8_t len_dest = datos[1];
+        if (datos.size() < 2 + len_dest + 1) {
+            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_EMPTY_MESSAGE));
+            return;
+        }
+        
+        std::string destino(datos.begin() + 2, datos.begin() + 2 + len_dest);
+        
+        uint8_t len_msg = datos[2 + len_dest];
+        if (datos.size() < 3 + len_dest + len_msg) {
+            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_EMPTY_MESSAGE));
+            return;
+        }
+        
+        std::string contenido(datos.begin() + 3 + len_dest, datos.begin() + 3 + len_dest + len_msg);
+        
+        if (contenido.empty()) {
+            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_EMPTY_MESSAGE));
+            return;
+        }
+        
+        logger.log("Cliente " + nombre_cliente + " envía mensaje a " + destino + ": " + contenido);
+
+        {
+            std::lock_guard<std::mutex> lock(usuarios_mutex);
+            auto it = usuarios.find(nombre_cliente);
+            if (it != usuarios.end()) {
+                it->second->actualizar_actividad();
+            }
+        }
+
+        auto mensaje_respuesta = crear_mensaje_recibido(nombre_cliente, contenido);
+
+        if (destino == "~") {
+            {
+                std::lock_guard<std::mutex> lock(chat_general_mutex);
+                chat_general.emplace_back(nombre_cliente, destino, contenido);
+                if (chat_general.size() > 1000) {
+                    chat_general.pop_front();
+                }
+            }
+
+            broadcast_mensaje(mensaje_respuesta);
+        } else {
             bool enviado = false;
             {
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
@@ -436,7 +482,7 @@ public:
                         enviado = true;
                     } catch (...) {}
                 }
-
+            }
             
             enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
             
