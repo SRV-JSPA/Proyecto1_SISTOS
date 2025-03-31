@@ -826,13 +826,8 @@ int main(int argc, char* argv[]) {
                     }
                     
 
-                    std::vector<uint8_t> notificacion = {
-                        SERVER_NEW_USER, 
-                        static_cast<uint8_t>(nombre_usuario.size())
-                    };
-                    notificacion.insert(notificacion.end(), nombre_usuario.begin(), nombre_usuario.end());
-                    notificacion.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
-                    
+                    std::vector<uint8_t> notificacion = servidor.crear_mensaje_cambio_estado(
+                        nombre_usuario, EstadoUsuario::ACTIVO);
                     servidor.broadcast_mensaje(notificacion);
                     std::cout << "Thread: Usuario " << nombre_usuario << " conectado y notificado" << std::endl;
 
