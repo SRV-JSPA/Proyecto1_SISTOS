@@ -38,7 +38,6 @@ enum MessageType : uint8_t {
     SERVER_HISTORY = 56
 };
 
-
 enum ErrorCode : uint8_t {
     ERROR_USER_NOT_FOUND = 1,
     ERROR_INVALID_STATUS = 2,
@@ -359,8 +358,6 @@ public:
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
 
-    //prueba
-
     void procesar_cambiar_estado(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 3) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
@@ -532,7 +529,8 @@ public:
             if (nombre_usuario.empty()) {
                 logger.log("Conexión rechazada: nombre de usuario vacío");
 
-                http::response<http::string_body> res{http::status::bad_request, 11};
+                http::response<http::string_body> 
+                res{http::status::bad_request, 11};
                 res.set(http::field::server, "ChatServer");
                 res.set(http::field::content_type, "text/plain");
                 res.body() = "Nombre de usuario vacío";
@@ -744,7 +742,7 @@ int main(int argc, char* argv[]) {
                     
 
                     if (nombre_usuario.empty()) {
-                        http::response<http::string_body> res{http::status::bad_request, 11};
+                        http::response<http::string_body>http::response<http::string_body> res{http::status::bad_request, 11};
                         res.set(http::field::server, "ChatServer");
                         res.set(http::field::content_type, "text/plain");
                         res.body() = "Nombre de usuario vacío";
