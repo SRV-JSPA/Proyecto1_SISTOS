@@ -304,9 +304,17 @@ public:
         if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
             try {
                 it->second->ws_stream->write(net::buffer(mensaje));
+                it->second->actualizar_actividad();  
                 return true;
             } catch (const std::exception& e) {
                 logger.log("Error enviando mensaje a " + nombre_usuario + ": " + e.what());
+                
+                if (it->second->estado != EstadoUsuario::DESCONECTADO) {
+                    it->second->estado = EstadoUsuario::DESCONECTADO;
+                    auto notificacion = crear_mensaje_cambio_estado(nombre_usuario, EstadoUsuario::DESCONECTADO);
+                    broadcast_mensaje(notificacion);
+                    logger.log("Usuario " + nombre_usuario + " marcado como DESCONECTADO por error de comunicación");
+                }
             }
         }
         return false;
@@ -393,13 +401,19 @@ public:
             return;
         }
     
+        EstadoUsuario estadoAnterior = it->second->estado;
+        
         it->second->estado = static_cast<EstadoUsuario>(estado);
         it->second->actualizar_actividad();
     
+        if (it->second->estado == EstadoUsuario::ACTIVO && estadoAnterior != EstadoUsuario::ACTIVO) {
+            logger.log("Usuario " + nombre_usuario + " volvió a estado ACTIVO - verificando conexión");
+            auto mensaje_confirmacion = crear_mensaje_info_usuario(nombre_usuario);
+            enviar_mensaje_a_usuario(nombre_cliente, mensaje_confirmacion);
+        }
+    
         auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
         broadcast_mensaje(mensaje);
-        
-        enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
 
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
