@@ -507,7 +507,7 @@ public:
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
                 
                 auto it_dest = usuarios.find(destino);
-                if (it_dest == usuarios.end() || it_dest->segundo->estado == EstadoUsuario::DESCONECTADO) {
+                if (it_dest == usuarios.end() || it_dest->second->estado == EstadoUsuario::DESCONECTADO) {
                     logger.log("Error: Destinatario " + destino + " no encontrado o desconectado");
                     enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
                     return;
