@@ -301,23 +301,32 @@ public:
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         auto it = usuarios.find(nombre_usuario);
-        if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
-            try {
-                it->second->ws_stream->write(net::buffer(mensaje));
-                it->second->actualizar_actividad();  
-                return true;
-            } catch (const std::exception& e) {
-                logger.log("Error enviando mensaje a " + nombre_usuario + ": " + e.what());
-                
-                if (it->second->estado != EstadoUsuario::DESCONECTADO) {
-                    it->second->estado = EstadoUsuario::DESCONECTADO;
-                    auto notificacion = crear_mensaje_cambio_estado(nombre_usuario, EstadoUsuario::DESCONECTADO);
-                    broadcast_mensaje(notificacion);
-                    logger.log("Usuario " + nombre_usuario + " marcado como DESCONECTADO por error de comunicación");
-                }
-            }
+        
+        if (it == usuarios.end() || it->second->estado == EstadoUsuario::DESCONECTADO) {
+            return false;
         }
-        return false;
+        
+        if (!it->second->ws_stream || !it->second->ws_stream->is_open()) {
+            logger.log("WebSocket inválido para " + nombre_usuario + " al intentar enviar mensaje");
+            it->second->estado = EstadoUsuario::DESCONECTADO;
+            auto notificacion = crear_mensaje_cambio_estado(nombre_usuario, EstadoUsuario::DESCONECTADO);
+            broadcast_mensaje(notificacion);
+            return false;
+        }
+        
+        try {
+            it->second->ws_stream->write(net::buffer(mensaje));
+            it->second->actualizar_actividad();
+            return true;
+        } catch (const std::exception& e) {
+            logger.log("Error enviando mensaje a " + nombre_usuario + ": " + e.what());
+            
+            it->second->estado = EstadoUsuario::DESCONECTADO;
+            auto notificacion = crear_mensaje_cambio_estado(nombre_usuario, EstadoUsuario::DESCONECTADO);
+            broadcast_mensaje(notificacion);
+            logger.log("Usuario " + nombre_usuario + " marcado como DESCONECTADO por error de comunicación");
+            return false;
+        }
     }
 
     std::string parse_nombre_usuario(const std::string& query_string) {
@@ -402,16 +411,33 @@ public:
         }
     
         EstadoUsuario estadoAnterior = it->second->estado;
-        
         it->second->estado = static_cast<EstadoUsuario>(estado);
         it->second->actualizar_actividad();
-    
-        if (it->second->estado == EstadoUsuario::ACTIVO && estadoAnterior != EstadoUsuario::ACTIVO) {
-            logger.log("Usuario " + nombre_usuario + " volvió a estado ACTIVO - verificando conexión");
-            auto mensaje_confirmacion = crear_mensaje_info_usuario(nombre_usuario);
-            enviar_mensaje_a_usuario(nombre_cliente, mensaje_confirmacion);
+        
+        if (it->second->estado == EstadoUsuario::ACTIVO && 
+            (estadoAnterior == EstadoUsuario::OCUPADO || estadoAnterior == EstadoUsuario::INACTIVO)) {
+            logger.log("Usuario " + nombre_usuario + " cambió de " + std::to_string(static_cast<int>(estadoAnterior)) + 
+                     " a ACTIVO - verificando WebSocket");
+            
+            if (it->second->ws_stream && it->second->ws_stream->is_open()) {
+                try {
+                    beast::flat_buffer buffer;
+                    std::vector<uint8_t> echo_msg = {99}; 
+                    it->second->ws_stream->write(net::buffer(echo_msg));
+                    logger.log("Conexión de WebSocket verificada para " + nombre_usuario);
+                } catch(const std::exception& e) {
+                    logger.log("Error verificando WebSocket para " + nombre_usuario + ": " + e.what());
+                    
+                    try {
+                        it->second->ws_stream->close(websocket::close_code::normal);
+                    } catch(...) {}
+                    
+                    it->second->estado = EstadoUsuario::DESCONECTADO;
+                    logger.log("Usuario " + nombre_usuario + " marcado como DESCONECTADO debido a WebSocket inválido");
+                }
+            }
         }
-    
+        
         auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
         broadcast_mensaje(mensaje);
     }
@@ -443,18 +469,28 @@ public:
             return;
         }
         
-        logger.log("Cliente " + nombre_cliente + " envía mensaje a " + destino + ": " + contenido);
-
         {
             std::lock_guard<std::mutex> lock(usuarios_mutex);
-            auto it = usuarios.find(nombre_cliente);
-            if (it != usuarios.end()) {
-                it->second->actualizar_actividad();
+            auto it_origen = usuarios.find(nombre_cliente);
+            if (it_origen == usuarios.end()) {
+                logger.log("Error: Remitente " + nombre_cliente + " no encontrado al enviar mensaje");
+                return;
             }
+            
+            if (it_origen->second->estado != EstadoUsuario::ACTIVO && 
+                it_origen->second->estado != EstadoUsuario::INACTIVO) {
+                logger.log("Error: Remitente " + nombre_cliente + " no está en estado válido para enviar mensajes");
+                enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
+                return;
+            }
+            
+            it_origen->second->actualizar_actividad();
         }
-
+        
+        logger.log("Cliente " + nombre_cliente + " envía mensaje a " + destino + ": " + contenido);
+        
         auto mensaje_respuesta = crear_mensaje_recibido(nombre_cliente, contenido);
-
+        
         if (destino == "~") {
             {
                 std::lock_guard<std::mutex> lock(chat_general_mutex);
@@ -463,19 +499,20 @@ public:
                     chat_general.pop_front();
                 }
             }
-
+            
             broadcast_mensaje(mensaje_respuesta);
         } else {
             bool enviado = false;
             {
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
-
+                
                 auto it_dest = usuarios.find(destino);
-                if (it_dest == usuarios.end() || it_dest->second->estado == EstadoUsuario::DESCONECTADO) {
+                if (it_dest == usuarios.end() || it_dest->segundo->estado == EstadoUsuario::DESCONECTADO) {
+                    logger.log("Error: Destinatario " + destino + " no encontrado o desconectado");
                     enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
                     return;
                 }
-
+                
                 auto it_origen = usuarios.find(nombre_cliente);
                 if (it_origen != usuarios.end()) {
                     it_origen->second->historial_mensajes.emplace_back(nombre_cliente, destino, contenido);
@@ -483,27 +520,55 @@ public:
                         it_origen->second->historial_mensajes.pop_front();
                     }
                 }
-
+                
                 it_dest->second->historial_mensajes.emplace_back(nombre_cliente, destino, contenido);
                 if (it_dest->second->historial_mensajes.size() > 1000) {
                     it_dest->second->historial_mensajes.pop_front();
                 }
-
+                
                 if (it_dest->second->puede_recibir_mensajes()) {
                     try {
-                        it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
-                        enviado = true;
-                    } catch (...) {}
+                        if (it_dest->second->ws_stream && it_dest->second->ws_stream->is_open()) {
+                            it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
+                            enviado = true;
+                            logger.log("Mensaje enviado con éxito a " + destino);
+                        } else {
+                            logger.log("Error: WebSocket no está abierto para " + destino);
+                            it_dest->second->estado = EstadoUsuario::DESCONECTADO;
+                            auto notificacion = crear_mensaje_cambio_estado(destino, EstadoUsuario::DESCONECTADO);
+                            broadcast_mensaje(notificacion);
+                            logger.log("Usuario " + destino + " marcado como DESCONECTADO por WebSocket cerrado");
+                            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
+                        }
+                    } catch (const std::exception& e) {
+                        logger.log("Error enviando mensaje a " + destino + ": " + e.what());
+                        
+                        if (it_dest->second->estado != EstadoUsuario::DESCONECTADO) {
+                            it_dest->second->estado = EstadoUsuario::DESCONECTADO;
+                            auto notificacion = crear_mensaje_cambio_estado(destino, EstadoUsuario::DESCONECTADO);
+                            broadcast_mensaje(notificacion);
+                            logger.log("Usuario " + destino + " marcado como DESCONECTADO por error de comunicación");
+                            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
+                        }
+                    }
+                } else {
+                    logger.log("No se envía mensaje a " + destino + " porque su estado no lo permite");
                 }
             }
             
-            enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
+            try {
+                bool remitente_enviado = enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
+                if (!remitente_enviado) {
+                    logger.log("No se pudo enviar confirmación al remitente " + nombre_cliente);
+                }
+            } catch (const std::exception& e) {
+                logger.log("Error enviando confirmación al remitente " + nombre_cliente + ": " + e.what());
+            }
             
             logger.log("Mensaje de " + nombre_cliente + " a " + destino + 
-                       (enviado ? " enviado" : " no enviado (usuario ocupado)"));
+                       (enviado ? " enviado" : " no enviado"));
         }
     }
-    
     void procesar_obtener_historial(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
