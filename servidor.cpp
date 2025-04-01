@@ -591,20 +591,22 @@ public:
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
                 auto it = usuarios.find(nombre_usuario);
                 if (it != usuarios.end()) {
-                    logger.log("Actualizando usuario existente: " + nombre_usuario + " (estado anterior: " + 
-                            std::to_string(static_cast<int>(it->second->estado)) + ")");
                     it->second->ws_stream = ws;
                     it->second->estado = EstadoUsuario::ACTIVO;
                     it->second->actualizar_actividad();
                     it->second->ip_address = ip_address;
                 } else {
-                    logger.log("Creando nuevo usuario: " + nombre_usuario);
                     usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
                 }
             }
 
-            std::vector<uint8_t> notificacion = crear_mensaje_cambio_estado(nombre_usuario, EstadoUsuario::ACTIVO);
-            logger.log("Enviando notificación de estado ACTIVO para: " + nombre_usuario);
+            std::vector<uint8_t> notificacion = {
+                SERVER_NEW_USER, 
+                static_cast<uint8_t>(nombre_usuario.size())
+            };
+            notificacion.insert(notificacion.end(), nombre_usuario.begin(), nombre_usuario.end());
+            notificacion.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
+            
             broadcast_mensaje(notificacion);
 
             beast::flat_buffer buffer;
@@ -710,6 +712,7 @@ int main(int argc, char* argv[]) {
         
 
         while (true) {
+
             tcp::socket socket{ioc};
             acceptor.accept(socket);
             
@@ -722,9 +725,11 @@ int main(int argc, char* argv[]) {
 
             std::thread([&servidor, sock = std::move(socket)]() mutable {
                 try {
+
                     beast::flat_buffer buffer;
                     http::request<http::string_body> req;
                     
+
                     http::read(sock, buffer, req);
                     
                     std::cout << "Thread: Petición HTTP recibida: " << req.target() << std::endl;
@@ -766,12 +771,6 @@ int main(int argc, char* argv[]) {
                         auto it = usuarios.find(nombre_usuario);
                         if (it != usuarios.end() && it->second->estado != EstadoUsuario::DESCONECTADO) {
                             usuario_ya_conectado = true;
-                            std::cout << "Thread: Usuario " << nombre_usuario << " ya está conectado con estado: " 
-                                << static_cast<int>(it->second->estado) << std::endl;
-                        } else if (it != usuarios.end()) {
-                            std::cout << "Thread: Usuario " << nombre_usuario << " encontrado pero desconectado, permitiendo reconexión" << std::endl;
-                        } else {
-                            std::cout << "Thread: Usuario " << nombre_usuario << " es nuevo, permitiendo conexión" << std::endl;
                         }
                     }
                     
@@ -791,6 +790,7 @@ int main(int argc, char* argv[]) {
                     ws->set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
                     
                     try {
+
                         ws->accept(req);
                         std::cout << "Thread: WebSocket handshake aceptado para: " << nombre_usuario << std::endl;
                     }
@@ -816,31 +816,25 @@ int main(int argc, char* argv[]) {
                         auto& usuarios = servidor.get_usuarios();
                         auto it = usuarios.find(nombre_usuario);
                         if (it != usuarios.end()) {
-
-                            std::cout << "Thread: Actualizando información de usuario existente: " << nombre_usuario 
-                                    << " (Estado anterior: " << static_cast<int>(it->second->estado) << ")" << std::endl;
-
-                            EstadoUsuario estado_anterior = it->second->estado;
-
                             it->second->ws_stream = ws;
                             it->second->estado = EstadoUsuario::ACTIVO;
                             it->second->actualizar_actividad();
                             it->second->ip_address = ip_address;
-                            
-                            std::cout << "Thread: Usuario " << nombre_usuario 
-                                    << " actualizado de estado " << static_cast<int>(estado_anterior) 
-                                    << " a " << static_cast<int>(it->second->estado) << std::endl;
                         } else {
-                            std::cout << "Thread: Creando nuevo usuario: " << nombre_usuario << std::endl;
                             usuarios[nombre_usuario] = std::make_shared<Usuario>(nombre_usuario, ws, ip_address);
                         }
                     }
                     
 
-                    std::vector<uint8_t> notificacion = servidor.crear_mensaje_cambio_estado(
-                        nombre_usuario, EstadoUsuario::ACTIVO);
+                    std::vector<uint8_t> notificacion = {
+                        SERVER_NEW_USER, 
+                        static_cast<uint8_t>(nombre_usuario.size())
+                    };
+                    notificacion.insert(notificacion.end(), nombre_usuario.begin(), nombre_usuario.end());
+                    notificacion.push_back(static_cast<uint8_t>(EstadoUsuario::ACTIVO));
+                    
                     servidor.broadcast_mensaje(notificacion);
-                    std::cout << "Thread: Notificación de estado ACTIVO enviada para: " << nombre_usuario << std::endl;
+                    std::cout << "Thread: Usuario " << nombre_usuario << " conectado y notificado" << std::endl;
 
                     beast::flat_buffer msg_buffer;
                     
