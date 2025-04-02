@@ -108,8 +108,7 @@ private:
     bool forceCanSend_;
 
     std::unordered_map<std::string, ContactInfo> contacts_;
-    std::unordered_map<std::string, std::vector<std::string>> chatHistory_;
-    
+    std::unordered_map<std::string, std::vector<std::pair<std::string, bool>>> chatHistory_;    
     void RequestUserList();
     void LoadChatHistory();
     void RequestChatHistory();
@@ -120,12 +119,14 @@ private:
     void OnCheckUserInfo(wxCommandEvent&);
     void OnRefreshUsers(wxCommandEvent&);
     void OnChangeStatus(wxCommandEvent&);
+    void MonitorearInactividad();
 
     std::vector<uint8_t> CreateListUsersMessage();
     std::vector<uint8_t> CreateGetUserMessage(const std::string& username);
     std::vector<uint8_t> CreateChangeStatusMessage(EstadoUsuario status);
     std::vector<uint8_t> CreateSendMessageMessage(const std::string& dest, const std::string& message);
     std::vector<uint8_t> CreateGetHistoryMessage(const std::string& chat);
+    std::chrono::steady_clock::time_point ultimaActividad_;
 
     void ProcessErrorMessage(const std::vector<uint8_t>& data);
     void ProcessListUsersMessage(const std::vector<uint8_t>& data);
@@ -225,8 +226,7 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
 
     StartReceivingMessages();
     RequestUserList();
-
-
+    MonitorearInactividad();
     UpdateContactListUI();
     
 
@@ -274,6 +274,30 @@ bool ChatFrame::CanSendMessage() const {
     return currentStatus_ == EstadoUsuario::ACTIVO || currentStatus_ == EstadoUsuario::INACTIVO;
 }
 
+void ChatFrame::MonitorearInactividad() {
+    std::thread([this]() {
+        while (running_) {
+            std::this_thread::sleep_for(std::chrono::seconds(20));
+
+            auto tiempoActual = std::chrono::steady_clock::now();
+            auto ultimaActividadTranscurrido = std::chrono::duration_cast<std::chrono::seconds>(
+                tiempoActual - ultimaActividad_
+            ).count();
+            
+            if (ultimaActividadTranscurrido >= 20 && 
+                currentStatus_ == EstadoUsuario::ACTIVO) {
+
+                wxGetApp().CallAfter([this]() {
+                    statusChoice->SetSelection(2);  
+                    
+                    wxCommandEvent fakeEvent(wxEVT_CHOICE, statusChoice->GetId());
+                    OnChangeStatus(fakeEvent);
+                });
+            }
+        }
+    }).detach();
+}
+
 bool ChatFrame::IsWebSocketConnected() {
     if (!ws_) return false;
     
@@ -285,6 +309,7 @@ bool ChatFrame::IsWebSocketConnected() {
 }
 
 void ChatFrame::OnSend(wxCommandEvent&) {
+    ultimaActividad_ = std::chrono::steady_clock::now();
     if (chatPartner_.empty()) {
         wxMessageBox("Seleccione un contacto primero", "Aviso", wxOK | wxICON_INFORMATION);
         return;
@@ -417,6 +442,7 @@ void ChatFrame::OnAddContact(wxCommandEvent&) {
 }
 
 void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
+    ultimaActividad_ = std::chrono::steady_clock::now();
     wxString selectedItem = contactList->GetString(evt.GetSelection());
     wxString contactName = selectedItem.AfterFirst(']').Trim(true).Trim(false);
 
@@ -431,6 +457,19 @@ void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
     chatTitle->SetLabel(titleText);
 
     chatBox->Clear();
+    
+    {
+        std::lock_guard<std::mutex> lock(chatHistoryMutex_);
+        auto it = chatHistory_.find(chatPartner_);
+        if (it != chatHistory_.end()) {
+            for (const auto& [msg, mostrar] : it->second) {
+                if (mostrar) {
+                    chatBox->AppendText(msg + "\n");
+                }
+            }
+        }
+    }
+    
     LoadChatHistory();
 }
 
@@ -519,6 +558,7 @@ void ChatFrame::UpdateStatusDisplay() {
 
 
 void ChatFrame::OnChangeStatus(wxCommandEvent&) {
+    ultimaActividad_ = std::chrono::steady_clock::now();
     int selection = statusChoice->GetSelection();
     EstadoUsuario newStatus;
     
@@ -539,6 +579,20 @@ void ChatFrame::OnChangeStatus(wxCommandEvent&) {
             newStatus = EstadoUsuario::ACTIVO; 
             canSendMessages_ = true;
             break;
+    }
+
+    if (newStatus == EstadoUsuario::ACTIVO) {
+        std::lock_guard<std::mutex> lock(chatHistoryMutex_);
+        
+        if (!chatPartner_.empty()) {
+            auto it = chatHistory_.find(chatPartner_);
+            if (it != chatHistory_.end()) {
+                chatBox->Clear();
+                for (const auto& [msg, _] : it->second) {
+                    chatBox->AppendText(msg + "\n");
+                }
+            }
+        }
     }
     
     currentStatus_ = newStatus;
@@ -894,11 +948,17 @@ void ChatFrame::ProcessMessageMessage(const std::vector<uint8_t>& data) {
         } else {
             chatKey = (chatPartner_ == "~") ? "~" : origin;
         }
+
+        bool mostrarMensaje = (currentStatus_ == EstadoUsuario::ACTIVO ||
+                               currentStatus_ == EstadoUsuario::INACTIVO);
         
-        chatHistory_[chatKey].push_back(formatted);
+        chatHistory_[chatKey].push_back({formatted, mostrarMensaje});
     }
 
-    if ((chatPartner_ == "~" || origin == chatPartner_) && origin != usuario_) {
+    if ((chatPartner_ == "~" || origin == chatPartner_) && 
+        origin != usuario_ && 
+        (currentStatus_ == EstadoUsuario::ACTIVO || 
+         currentStatus_ == EstadoUsuario::INACTIVO)) {
         wxGetApp().CallAfter([this, formatted]() {
             chatBox->AppendText(formatted + "\n");
         });
@@ -912,6 +972,7 @@ void ChatFrame::ProcessHistoryMessage(const std::vector<uint8_t>& data) {
     size_t offset = 2;
     
     std::vector<std::string> messages;
+    std::vector<std::pair<std::string, bool>> historicalMessages;
     
     for (uint8_t i = 0; i < numMessages; i++) {
         if (offset >= data.size()) break;
@@ -931,12 +992,20 @@ void ChatFrame::ProcessHistoryMessage(const std::vector<uint8_t>& data) {
         offset += msgLen;
 
         std::string formatted = username + ": " + message;
-        messages.push_back(formatted);
+        
+        bool mostrarMensaje = (currentStatus_ == EstadoUsuario::ACTIVO ||
+                               currentStatus_ == EstadoUsuario::INACTIVO);
+        
+        historicalMessages.push_back({formatted, mostrarMensaje});
+        
+        if (mostrarMensaje) {
+            messages.push_back(formatted);
+        }
     }
     
     {
         std::lock_guard<std::mutex> lock(chatHistoryMutex_);
-        chatHistory_[chatPartner_] = messages;
+        chatHistory_[chatPartner_] = historicalMessages;
     }
     
     wxGetApp().CallAfter([this, messages]() {
