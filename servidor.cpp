@@ -198,9 +198,12 @@ private:
             return crear_mensaje_error(ERROR_USER_NOT_FOUND);
         }
         
+        std::string ip_str = it->second->ip_address.to_string();
         std::vector<uint8_t> mensaje = {SERVER_USER_INFO, static_cast<uint8_t>(nombre.size())};
         mensaje.insert(mensaje.end(), nombre.begin(), nombre.end());
         mensaje.push_back(static_cast<uint8_t>(it->second->estado));
+        mensaje.push_back(static_cast<uint8_t>(ip_str.size()));
+        mensaje.insert(mensaje.end(), ip_str.begin(), ip_str.end());
         
         return mensaje;
     }
