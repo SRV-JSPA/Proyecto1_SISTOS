@@ -333,6 +333,7 @@ public:
             }
             
             try {
+                usuario->ws_stream->next_layer().expires_after(std::chrono::seconds(2));
                 usuario->ws_stream->write(net::buffer(mensaje));
                 success_count++;
                 logger.log("BROADCAST ÉXITO: Mensaje enviado a " + nombre);
