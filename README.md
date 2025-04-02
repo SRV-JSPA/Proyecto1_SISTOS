@@ -98,7 +98,7 @@ Se abrirá la interfaz donde se debe de ingresar lo siguiente:
 
 ---
 
-## 🧪 Sistema Operativo y Portabilidad
+## Sistema Operativo y Portabilidad
 
 - Este proyecto fue hecho y probado en **macOS**
 - Si usás **Linux**:
