@@ -285,40 +285,29 @@ public:
         return usuarios;
     }
 
-    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
-        std::lock_guard<std::mutex> lock(usuarios_mutex);
+    void broadcast_mensaje(const std::vector<uint8_t>& mensaje, bool already_locked = false) {
+        std::unique_lock<std::mutex> lock(usuarios_mutex, std::defer_lock);
+        if (!already_locked) {
+            lock.lock();
+        }
         
-        logger.log("Entrando a broadcast_mensaje: usuarios = " + std::to_string(usuarios.size()));
-        
-        for (auto& [nombre, usuario] : usuarios) {
-            logger.log(" Revisando usuario: " + nombre + " con estado = " + std::to_string(static_cast<int>(usuario->estado)));
-            
-            if (usuario->estado != EstadoUsuario::DESCONECTADO) {
-                try {
-                    if (!usuario->ws_stream || !usuario->ws_stream->is_open()) {
-                        logger.log("⚠️ WebSocket cerrado para " + nombre);
-                        usuario->estado = EstadoUsuario::DESCONECTADO;
-                        continue;
-                    }
-    
-                    logger.log("📤 Enviando mensaje a " + nombre);
-                    usuario->ws_stream->write(net::buffer(mensaje));
-                    logger.log("Mensaje enviado exitosamente a " + nombre);
-    
-                } catch (const std::exception& e) {
-                    logger.log("Error al enviar mensaje a " + nombre + ": " + e.what());
-    
-                    usuario->estado = EstadoUsuario::DESCONECTADO;
+        try {
+            for (auto& [nombre, usuario] : usuarios) {
+                if (usuario->estado != EstadoUsuario::DESCONECTADO) {
                     try {
-                        usuario->ws_stream->close(websocket::close_code::normal);
-                    } catch (...) {
-                        logger.log("Error cerrando conexión de " + nombre);
+                        if (usuario->ws_stream && usuario->ws_stream->is_open()) {
+                            usuario->ws_stream->write(net::buffer(mensaje));
+                        } else {
+                            logger.log("Skipping broadcast to " + nombre + " - WebSocket not open");
+                        }
+                    } catch (const std::exception& e) {
+                        logger.log("Error enviando broadcast a " + nombre + ": " + e.what());
                     }
                 }
             }
+        } catch (const std::exception& e) {
+            logger.log("Error en broadcast_mensaje: " + std::string(e.what()));
         }
-    
-        logger.log("broadcast_mensaje completado.");
     }
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
@@ -441,12 +430,12 @@ public:
                    " a " + std::to_string(static_cast<int>(it->second->estado)));
     
             try {
-            auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
-            logger.log("PREPARANDO BROADCAST: Cambio de estado de usuario " + nombre_usuario + 
-                " de " + std::to_string(static_cast<int>(estadoAnterior)) + 
-                " a " + std::to_string(static_cast<int>(it->second->estado)));
-            broadcast_mensaje(mensaje);
-            logger.log("BROADCAST COMPLETADO: Notificación de cambio de estado enviada a todos los usuarios conectados");
+                auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
+                logger.log("PREPARANDO BROADCAST: Cambio de estado de usuario " + nombre_usuario +
+                    " de " + std::to_string(static_cast<int>(estadoAnterior)) +
+                    " a " + std::to_string(static_cast<int>(it->second->estado)));
+                broadcast_mensaje(mensaje, true); 
+                logger.log("BROADCAST COMPLETADO: Notificación de cambio de estado enviada a todos los usuarios conectados");
         } catch (const std::exception& e) {
             logger.log("ERROR durante creación o envío de broadcast: " + std::string(e.what()));
         } catch (...) {
