@@ -285,7 +285,7 @@ public:
         return usuarios;
     }
 
-    void ChatServer::broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
+    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         
         logger.log("Entrando a broadcast_mensaje: usuarios = " + std::to_string(usuarios.size()));
