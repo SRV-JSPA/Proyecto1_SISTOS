@@ -146,6 +146,7 @@ private:
     bool ReiniciarConexion();
     bool VerificarConexion();
     void ActualizarInfoConexion();
+    void OnHelp(wxCommandEvent&);
 };
 
 ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario)
@@ -213,7 +214,7 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
 
     wxBoxSizer* contactButtonsSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    addContactButton = new wxButton(panel, wxID_ANY, "Agregar");
+    addContactButton = new wxButton(panel, wxID_ANY, "Ayuda");
     contactButtonsSizer->Add(addContactButton, 1, wxALL, 5);
 
     checkUserInfoButton = new wxButton(panel, wxID_ANY, "Info");
@@ -252,7 +253,7 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
 
     sendButton->Bind(wxEVT_BUTTON, &ChatFrame::OnSend, this);
     messageInput->Bind(wxEVT_TEXT_ENTER, &ChatFrame::OnSend, this);
-    addContactButton->Bind(wxEVT_BUTTON, &ChatFrame::OnAddContact, this);
+    addContactButton->Bind(wxEVT_BUTTON, &ChatFrame::OnHelp, this);
     checkUserInfoButton->Bind(wxEVT_BUTTON, &ChatFrame::OnCheckUserInfo, this);
     refreshUsersButton->Bind(wxEVT_BUTTON, &ChatFrame::OnRefreshUsers, this);
     contactList->Bind(wxEVT_LISTBOX, &ChatFrame::OnSelectContact, this);
@@ -353,6 +354,64 @@ bool ChatFrame::IsWebSocketConnected() {
     } catch (...) {
         return false;
     }
+}
+
+void ChatFrame::OnHelp(wxCommandEvent&) {
+    wxString ayudaText = 
+        "MANUAL DE USO DEL CLIENTE DE CHAT\n"
+        "===============================\n\n"
+        "INFORMACIÓN GENERAL:\n"
+        "- En la esquina superior derecha se muestra tu nombre de usuario y la IP desde donde te conectas.\n"
+        "- En la esquina superior izquierda hay un botón 'Salir' para cerrar sesión y volver a la pantalla de inicio.\n\n"
+        
+        "GESTIÓN DE ESTADO:\n"
+        "- Puedes cambiar tu estado usando el menú desplegable en la parte superior izquierda.\n"
+        "- Estados disponibles: Activo, Ocupado, Inactivo.\n"
+        "- En estado 'Ocupado' no recibirás mensajes nuevos.\n"
+        "- El sistema te cambiará automáticamente a 'Inactivo' tras 20 segundos sin actividad.\n\n"
+        
+        "CONTACTOS Y CHAT:\n"
+        "- La lista de la izquierda muestra todos los usuarios conectados y el Chat General.\n"
+        "- Selecciona un contacto para chatear con él o selecciona el Chat General para enviar mensajes a todos.\n"
+        "- Prefijos en los contactos: [A] Activo, [O] Ocupado, [I] Inactivo, [D] Desconectado.\n\n"
+        
+        "BOTONES:\n"
+        "- Ayuda: Muestra este manual de usuario.\n"
+        "- Info: Muestra información detallada sobre el usuario seleccionado.\n"
+        "- Actualizar: Refresca la lista de usuarios conectados.\n"
+        "- Enviar: Envía el mensaje escrito (también puedes presionar Enter).\n\n"
+        
+        "OTRAS CARACTERÍSTICAS:\n"
+        "- El historial de chat se guarda automáticamente.\n"
+        "- La aplicación intentará reconectarse automáticamente si se pierde la conexión.\n"
+        "- Los mensajes tienen un límite de 255 caracteres.";
+
+    wxDialog* helpDialog = new wxDialog(this, wxID_ANY, "Manual de Uso", 
+                                      wxDefaultPosition, wxSize(600, 500));
+    
+    wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
+    
+    wxTextCtrl* textCtrl = new wxTextCtrl(helpDialog, wxID_ANY, ayudaText, 
+                                        wxDefaultPosition, wxDefaultSize, 
+                                        wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH);
+    
+    wxFont font = textCtrl->GetFont();
+    font.SetPointSize(font.GetPointSize() + 1);
+    textCtrl->SetFont(font);
+    
+    sizer->Add(textCtrl, 1, wxEXPAND | wxALL, 10);
+    
+    wxButton* closeButton = new wxButton(helpDialog, wxID_CLOSE, "Cerrar");
+    closeButton->Bind(wxEVT_BUTTON, [helpDialog](wxCommandEvent&) {
+        helpDialog->EndModal(wxID_CLOSE);
+    });
+    
+    sizer->Add(closeButton, 0, wxALIGN_CENTER | wxBOTTOM, 10);
+    
+    helpDialog->SetSizer(sizer);
+    helpDialog->ShowModal();
+    
+    helpDialog->Destroy();
 }
 
 void ChatFrame::OnSend(wxCommandEvent&) {
