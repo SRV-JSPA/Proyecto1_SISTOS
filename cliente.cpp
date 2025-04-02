@@ -899,7 +899,7 @@ void ChatFrame::ProcessMessageMessage(const std::vector<uint8_t>& data) {
         chatHistory_[chatKey].push_back(formatted);
     }
 
-    if (chatPartner_ == "~" || origin == chatPartner_ || origin == usuario_) {
+    if ((chatPartner_ == "~" || origin == chatPartner_) && origin != usuario_) {
         wxGetApp().CallAfter([this, formatted]() {
             chatBox->AppendText(formatted + "\n");
         });
