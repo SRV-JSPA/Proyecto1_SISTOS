@@ -482,8 +482,18 @@ public:
                    std::to_string(static_cast<int>(estadoAnterior)) + 
                    " a " + std::to_string(static_cast<int>(it->second->estado)));
     
-        auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
-        broadcast_mensaje(mensaje);
+            try {
+            auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
+            logger.log("PREPARANDO BROADCAST: Cambio de estado de usuario " + nombre_usuario + 
+                " de " + std::to_string(static_cast<int>(estadoAnterior)) + 
+                " a " + std::to_string(static_cast<int>(it->second->estado)));
+            broadcast_mensaje(mensaje);
+            logger.log("BROADCAST COMPLETADO: Notificación de cambio de estado enviada a todos los usuarios conectados");
+        } catch (const std::exception& e) {
+            logger.log("ERROR durante creación o envío de broadcast: " + std::string(e.what()));
+        } catch (...) {
+            logger.log("ERROR desconocido durante creación o envío de broadcast.");
+        }
     }
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
