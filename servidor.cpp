@@ -285,15 +285,12 @@ public:
         return usuarios;
     }
 
-    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
+    void ChatServer::broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         for (auto& [nombre, usuario] : usuarios) {
             if (usuario->estado != EstadoUsuario::DESCONECTADO) {
                 try {
-                    usuario->ws_stream->set_option(
-                        websocket::stream_base::timeout::suggested(beast::role_type::server)
-                    );
-    
+                    usuario->ws_stream->next_layer().expires_after(std::chrono::seconds(2)); 
                     usuario->ws_stream->write(net::buffer(mensaje));
                     logger.log("Broadcast enviado a " + nombre);
                 } catch (const std::exception& e) {
@@ -306,7 +303,7 @@ public:
                 }
             }
         }
-    } 
+    }
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         auto it = usuarios.find(nombre_usuario);
