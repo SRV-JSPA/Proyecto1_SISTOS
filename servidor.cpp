@@ -506,12 +506,20 @@ public:
                     chat_general.pop_front();
                 }
             }
-
+    
             auto mensaje_anonimo = crear_mensaje_recibido("Anónimo", contenido);
-
-            broadcast_mensaje(mensaje_anonimo, false, nombre_cliente);
+            
+            std::thread([this, mensaje_anonimo, nombre_cliente]() {
+                logger.log("Iniciando thread para broadcasting de mensaje");
+                broadcast_mensaje(mensaje_anonimo, false, nombre_cliente);
+                logger.log("Thread de broadcasting finalizado");
+            }).detach();
+            
+            logger.log("Thread de broadcasting creado para mensaje de " + nombre_cliente + " al chat general");
         } else {
-            bool enviado = false;
+            std::shared_ptr<Usuario> usuario_destino;
+            std::shared_ptr<Usuario> usuario_origen;
+            
             {
                 std::lock_guard<std::mutex> lock(usuarios_mutex);
                 
@@ -528,6 +536,7 @@ public:
                     if (it_origen->second->historial_mensajes.size() > 1000) {
                         it_origen->second->historial_mensajes.pop_front();
                     }
+                    usuario_origen = it_origen->second;
                 }
                 
                 it_dest->second->historial_mensajes.emplace_back(nombre_cliente, destino, contenido);
@@ -535,50 +544,57 @@ public:
                     it_dest->second->historial_mensajes.pop_front();
                 }
                 
-                if (it_dest->second->puede_recibir_mensajes()) {
+                usuario_destino = it_dest->second;
+            }
+            
+            if (usuario_destino->puede_recibir_mensajes()) {
+                std::thread([this, usuario_destino, mensaje_respuesta, destino]() {
+                    logger.log("Iniciando thread para envío directo a " + destino);
                     try {
-                        if (it_dest->second->ws_stream && it_dest->second->ws_stream->is_open()) {
-                            it_dest->second->ws_stream->write(net::buffer(mensaje_respuesta));
-                            enviado = true;
-                            logger.log("Mensaje enviado con éxito a " + destino);
+                        if (usuario_destino->ws_stream && usuario_destino->ws_stream->is_open()) {
+                            usuario_destino->ws_stream->write(net::buffer(mensaje_respuesta));
+                            logger.log("Mensaje enviado con éxito a " + destino + " en thread separado");
                         } else {
                             logger.log("Error: WebSocket no está abierto para " + destino);
-                            it_dest->second->estado = EstadoUsuario::DESCONECTADO;
+                            std::lock_guard<std::mutex> lock(usuarios_mutex);
+                            usuario_destino->estado = EstadoUsuario::DESCONECTADO;
                             auto notificacion = crear_mensaje_cambio_estado(destino, EstadoUsuario::DESCONECTADO);
                             broadcast_mensaje(notificacion);
                             logger.log("Usuario " + destino + " marcado como DESCONECTADO por WebSocket cerrado");
-                            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
                         }
                     } catch (const std::exception& e) {
-                        logger.log("Error enviando mensaje a " + destino + ": " + e.what());
+                        logger.log("Error enviando mensaje a " + destino + " en thread separado: " + e.what());
                         
-                        if (it_dest->second->estado != EstadoUsuario::DESCONECTADO) {
-                            it_dest->second->estado = EstadoUsuario::DESCONECTADO;
+                        std::lock_guard<std::mutex> lock(usuarios_mutex);
+                        if (usuario_destino->estado != EstadoUsuario::DESCONECTADO) {
+                            usuario_destino->estado = EstadoUsuario::DESCONECTADO;
                             auto notificacion = crear_mensaje_cambio_estado(destino, EstadoUsuario::DESCONECTADO);
                             broadcast_mensaje(notificacion);
                             logger.log("Usuario " + destino + " marcado como DESCONECTADO por error de comunicación");
-                            enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_DISCONNECTED_USER));
                         }
                     }
-                } else {
-                    logger.log("No se envía mensaje a " + destino + " porque su estado no lo permite");
-                }
+                    logger.log("Thread de envío directo a " + destino + " finalizado");
+                }).detach();
+                
+                logger.log("Thread de envío directo creado para mensaje de " + nombre_cliente + " a " + destino);
+            } else {
+                logger.log("No se envía mensaje a " + destino + " porque su estado no lo permite");
             }
             
-            try {
-                bool remitente_enviado = enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
-                if (!remitente_enviado) {
-                    logger.log("No se pudo enviar confirmación al remitente " + nombre_cliente);
+            std::thread([this, nombre_cliente, mensaje_respuesta]() {
+                logger.log("Iniciando thread para envío de confirmación a " + nombre_cliente);
+                try {
+                    bool remitente_enviado = enviar_mensaje_a_usuario(nombre_cliente, mensaje_respuesta);
+                    if (!remitente_enviado) {
+                        logger.log("No se pudo enviar confirmación al remitente " + nombre_cliente);
+                    }
+                } catch (const std::exception& e) {
+                    logger.log("Error enviando confirmación al remitente " + nombre_cliente + ": " + e.what());
                 }
-            } catch (const std::exception& e) {
-                logger.log("Error enviando confirmación al remitente " + nombre_cliente + ": " + e.what());
-            }
-            
-            logger.log("Mensaje de " + nombre_cliente + " a " + destino + 
-                       (enviado ? " enviado" : " no enviado"));
+                logger.log("Thread de envío de confirmación a " + nombre_cliente + " finalizado");
+            }).detach();
         }
     }
-
     void procesar_obtener_historial(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
