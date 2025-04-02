@@ -233,7 +233,6 @@ private:
                     historial.push_back(std::make_shared<Mensaje>("Anónimo", msg_original.destino, msg_original.contenido));
                 }
             }
-        }
         } else {
             std::lock_guard<std::mutex> lock(usuarios_mutex);
             
@@ -311,6 +310,7 @@ public:
             logger.log("Error en broadcast_mensaje: " + std::string(e.what()));
         }
     }
+
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         auto it = usuarios.find(nombre_usuario);
@@ -431,19 +431,20 @@ public:
                    std::to_string(static_cast<int>(estadoAnterior)) + 
                    " a " + std::to_string(static_cast<int>(it->second->estado)));
     
-            try {
-                auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
-                logger.log("PREPARANDO BROADCAST: Cambio de estado de usuario " + nombre_usuario +
-                    " de " + std::to_string(static_cast<int>(estadoAnterior)) +
-                    " a " + std::to_string(static_cast<int>(it->second->estado)));
-                broadcast_mensaje(mensaje, true); 
-                logger.log("BROADCAST COMPLETADO: Notificación de cambio de estado enviada a todos los usuarios conectados");
+        try {
+            auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
+            logger.log("PREPARANDO BROADCAST: Cambio de estado de usuario " + nombre_usuario +
+                " de " + std::to_string(static_cast<int>(estadoAnterior)) +
+                " a " + std::to_string(static_cast<int>(it->second->estado)));
+            broadcast_mensaje(mensaje, true); 
+            logger.log("BROADCAST COMPLETADO: Notificación de cambio de estado enviada a todos los usuarios conectados");
         } catch (const std::exception& e) {
             logger.log("ERROR durante creación o envío de broadcast: " + std::string(e.what()));
         } catch (...) {
             logger.log("ERROR desconocido durante creación o envío de broadcast.");
         }
     }
+
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_EMPTY_MESSAGE));
@@ -502,10 +503,15 @@ public:
                 }
             }
             
+            // Crear mensaje anónimo para el chat general
             auto mensaje_anonimo = crear_mensaje_recibido("Anónimo", contenido);
             
+            // Broadcast del mensaje anónimo
             broadcast_mensaje(mensaje_anonimo);
-        }
+            
+            // Enviar una confirmación al remitente (opcional)
+            auto conf_remitente = crear_mensaje_recibido("Anónimo", contenido);
+            enviar_mensaje_a_usuario(nombre_cliente, conf_remitente);
         } else {
             bool enviado = false;
             {
@@ -574,6 +580,7 @@ public:
                        (enviado ? " enviado" : " no enviado"));
         }
     }
+
     void procesar_obtener_historial(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
