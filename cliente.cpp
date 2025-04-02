@@ -98,6 +98,7 @@ private:
     wxStaticText* chatTitle;
     wxStaticText* statusText;
     wxStaticText* connectionInfoText;  
+    wxButton* logoutButton;
     
     std::shared_ptr<websocket::stream<tcp::socket>> ws_;
     std::string usuario_;
@@ -121,6 +122,7 @@ private:
     void OnRefreshUsers(wxCommandEvent&);
     void OnChangeStatus(wxCommandEvent&);
     void MonitorearInactividad();
+    void OnLogout(wxCommandEvent&);
 
     std::vector<uint8_t> CreateListUsersMessage();
     std::vector<uint8_t> CreateGetUserMessage(const std::string& username);
@@ -168,7 +170,9 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     wxPanel* panel = new wxPanel(this);
     
     wxBoxSizer* topSizer = new wxBoxSizer(wxVERTICAL);
-    
+
+    logoutButton = new wxButton(panel, wxID_ANY, "Salir", wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+
     wxString connectionInfo = wxString::Format("Conectado como: %s\nIP: %s", 
                                              usuario.c_str(), ip_local.c_str());
     connectionInfoText = new wxStaticText(panel, wxID_ANY, connectionInfo);
@@ -177,10 +181,12 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     font.SetWeight(wxFONTWEIGHT_BOLD);
     connectionInfoText->SetFont(font);
     connectionInfoText->SetForegroundColour(wxColour(0, 128, 0));
-    
+
     wxBoxSizer* headerSizer = new wxBoxSizer(wxHORIZONTAL);
+    headerSizer->Add(logoutButton, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10); 
     headerSizer->AddStretchSpacer(); 
-    headerSizer->Add(connectionInfoText, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);    
+    headerSizer->Add(connectionInfoText, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10); 
+    
     topSizer->Add(headerSizer, 0, wxEXPAND);
     
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -251,13 +257,13 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     refreshUsersButton->Bind(wxEVT_BUTTON, &ChatFrame::OnRefreshUsers, this);
     contactList->Bind(wxEVT_LISTBOX, &ChatFrame::OnSelectContact, this);
     statusChoice->Bind(wxEVT_CHOICE, &ChatFrame::OnChangeStatus, this);
+    logoutButton->Bind(wxEVT_BUTTON, &ChatFrame::OnLogout, this);
 
     StartReceivingMessages();
     RequestUserList();
     MonitorearInactividad();
     UpdateContactListUI();
     
-
     contactList->SetSelection(contactList->FindString("[A] Chat General"));
     chatPartner_ = "~";
     chatTitle->SetLabel("Chat con: Chat General");
@@ -1212,6 +1218,19 @@ void OnConectar(wxCommandEvent&) {
     }).detach();
 }
 };
+
+void ChatFrame::OnLogout(wxCommandEvent&) {
+    running_ = false;
+    try {
+        ws_->close(websocket::close_code::normal);
+    } catch (...) {
+    }
+
+    MyFrame* loginFrame = new MyFrame();
+    loginFrame->Show(true);
+
+    this->Destroy();
+}
 
 bool MyApp::OnInit() {
     MyFrame* frame = new MyFrame();
