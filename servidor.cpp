@@ -285,27 +285,30 @@ public:
         return usuarios;
     }
 
-    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
+    void ChatServer::broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         
-        std::vector<std::string> clientes_a_eliminar;
-    
+        logger.log("Entrando a broadcast_mensaje: usuarios = " + std::to_string(usuarios.size()));
+        
         for (auto& [nombre, usuario] : usuarios) {
+            logger.log(" Revisando usuario: " + nombre + " con estado = " + std::to_string(static_cast<int>(usuario->estado)));
+            
             if (usuario->estado != EstadoUsuario::DESCONECTADO) {
-                logger.log("⏳ Intentando enviar a " + nombre);
                 try {
-                    usuario->ws_stream->set_option(
-                        websocket::stream_base::timeout::suggested(beast::role_type::server)
-                    );
+                    if (!usuario->ws_stream || !usuario->ws_stream->is_open()) {
+                        logger.log("⚠️ WebSocket cerrado para " + nombre);
+                        usuario->estado = EstadoUsuario::DESCONECTADO;
+                        continue;
+                    }
     
+                    logger.log("📤 Enviando mensaje a " + nombre);
                     usuario->ws_stream->write(net::buffer(mensaje));
-                    logger.log("Mensaje enviado a " + nombre);
+                    logger.log("Mensaje enviado exitosamente a " + nombre);
+    
                 } catch (const std::exception& e) {
                     logger.log("Error al enviar mensaje a " + nombre + ": " + e.what());
     
                     usuario->estado = EstadoUsuario::DESCONECTADO;
-                    clientes_a_eliminar.push_back(nombre);
-    
                     try {
                         usuario->ws_stream->close(websocket::close_code::normal);
                     } catch (...) {
@@ -315,10 +318,7 @@ public:
             }
         }
     
-        for (const std::string& nombre : clientes_a_eliminar) {
-            usuarios.erase(nombre);
-            logger.log("🗑️ Cliente eliminado de la lista: " + nombre);
-        }
+        logger.log("broadcast_mensaje completado.");
     }
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
