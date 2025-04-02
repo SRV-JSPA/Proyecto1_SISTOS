@@ -517,7 +517,6 @@ void ChatFrame::UpdateStatusDisplay() {
     UpdateContactListUI();
 }
 
-//prueba
 
 void ChatFrame::OnChangeStatus(wxCommandEvent&) {
     int selection = statusChoice->GetSelection();

@@ -286,7 +286,8 @@ public:
         return usuarios;
     }
 
-    void broadcast_mensaje(const std::vector<uint8_t>& mensaje, bool already_locked = false) {
+    void broadcast_mensaje(const std::vector<uint8_t>& mensaje, bool already_locked = false, 
+                          const std::string& exclude_user = "") {
         std::unique_lock<std::mutex> lock(usuarios_mutex, std::defer_lock);
         if (!already_locked) {
             lock.lock();
@@ -294,7 +295,7 @@ public:
         
         try {
             for (auto& [nombre, usuario] : usuarios) {
-                if (usuario->estado != EstadoUsuario::DESCONECTADO) {
+                if (usuario->estado != EstadoUsuario::DESCONECTADO && nombre != exclude_user) {
                     try {
                         if (usuario->ws_stream && usuario->ws_stream->is_open()) {
                             usuario->ws_stream->write(net::buffer(mensaje));
@@ -502,16 +503,10 @@ public:
                     chat_general.pop_front();
                 }
             }
-            
-            // Crear mensaje anónimo para el chat general
+
             auto mensaje_anonimo = crear_mensaje_recibido("Anónimo", contenido);
-            
-            // Broadcast del mensaje anónimo
-            broadcast_mensaje(mensaje_anonimo);
-            
-            // Enviar una confirmación al remitente (opcional)
-            auto conf_remitente = crear_mensaje_recibido("Anónimo", contenido);
-            enviar_mensaje_a_usuario(nombre_cliente, conf_remitente);
+
+            broadcast_mensaje(mensaje_anonimo, false, nombre_cliente);
         } else {
             bool enviado = false;
             {
