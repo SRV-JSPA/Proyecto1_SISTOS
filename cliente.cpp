@@ -97,6 +97,7 @@ private:
     wxChoice* statusChoice;
     wxStaticText* chatTitle;
     wxStaticText* statusText;
+    wxStaticText* connectionInfoText;  
     
     std::shared_ptr<websocket::stream<tcp::socket>> ws_;
     std::string usuario_;
@@ -142,6 +143,7 @@ private:
     bool IsWebSocketConnected();
     bool ReiniciarConexion();
     bool VerificarConexion();
+    void ActualizarInfoConexion();
 };
 
 ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const std::string& usuario)
@@ -153,10 +155,34 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
       canSendMessages_(true),
       forceCanSend_(false) {
 
+    std::string ip_local;
+    try {
+        ip_local = ws_->next_layer().local_endpoint().address().to_string();
+    } catch (std::exception& e) {
+        ip_local = "No disponible";
+    }
+
     contacts_.insert({"~", ContactInfo("Chat General", EstadoUsuario::ACTIVO)});
     contacts_.insert({usuario_, ContactInfo(usuario_, EstadoUsuario::ACTIVO)});
     
     wxPanel* panel = new wxPanel(this);
+    
+    wxBoxSizer* topSizer = new wxBoxSizer(wxVERTICAL);
+    
+    wxString connectionInfo = wxString::Format("Conectado como: %s\nIP: %s", 
+                                             usuario.c_str(), ip_local.c_str());
+    connectionInfoText = new wxStaticText(panel, wxID_ANY, connectionInfo);
+    
+    wxFont font = connectionInfoText->GetFont();
+    font.SetWeight(wxFONTWEIGHT_BOLD);
+    connectionInfoText->SetFont(font);
+    connectionInfoText->SetForegroundColour(wxColour(0, 128, 0));
+    
+    wxBoxSizer* headerSizer = new wxBoxSizer(wxHORIZONTAL);
+    headerSizer->AddStretchSpacer(); 
+    headerSizer->Add(connectionInfoText, 0, wxALL | wxALIGN_CENTER_VERTICAL, 10);    
+    topSizer->Add(headerSizer, 0, wxEXPAND);
+    
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
 
     wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
@@ -212,6 +238,11 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
 
     mainSizer->Add(leftSizer, 1, wxEXPAND | wxALL, 10);
     mainSizer->Add(rightSizer, 2, wxEXPAND | wxALL, 10);
+    
+    topSizer->Add(mainSizer, 1, wxEXPAND);
+
+    panel->SetSizer(topSizer);
+    topSizer->Fit(this);
 
     sendButton->Bind(wxEVT_BUTTON, &ChatFrame::OnSend, this);
     messageInput->Bind(wxEVT_TEXT_ENTER, &ChatFrame::OnSend, this);
@@ -220,9 +251,6 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
     refreshUsersButton->Bind(wxEVT_BUTTON, &ChatFrame::OnRefreshUsers, this);
     contactList->Bind(wxEVT_LISTBOX, &ChatFrame::OnSelectContact, this);
     statusChoice->Bind(wxEVT_CHOICE, &ChatFrame::OnChangeStatus, this);
-
-    panel->SetSizer(mainSizer);
-    mainSizer->Fit(this);
 
     StartReceivingMessages();
     RequestUserList();
@@ -242,6 +270,19 @@ ChatFrame::~ChatFrame() {
     } catch (...) {
 
     }
+}
+
+void ChatFrame::ActualizarInfoConexion() {
+    std::string ip_local;
+    try {
+        ip_local = ws_->next_layer().local_endpoint().address().to_string();
+    } catch (std::exception& e) {
+        ip_local = "No disponible";
+    }
+    
+    wxString connectionInfo = wxString::Format("Conectado como: %s\nIP: %s", 
+                                            usuario_.c_str(), ip_local.c_str());
+    connectionInfoText->SetLabel(connectionInfo);
 }
 
 void ChatFrame::RequestUserList() {
@@ -675,6 +716,8 @@ bool ChatFrame::ReiniciarConexion() {
 
         ws_ = new_ws;
         RequestUserList();
+        
+        ActualizarInfoConexion();
         
         return true;
     } catch (const std::exception& e) {
