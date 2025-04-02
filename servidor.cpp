@@ -287,24 +287,37 @@ public:
 
     void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
+        
+        std::vector<std::string> clientes_a_eliminar;
+    
         for (auto& [nombre, usuario] : usuarios) {
             if (usuario->estado != EstadoUsuario::DESCONECTADO) {
+                logger.log("⏳ Intentando enviar a " + nombre);
                 try {
                     usuario->ws_stream->set_option(
                         websocket::stream_base::timeout::suggested(beast::role_type::server)
                     );
     
                     usuario->ws_stream->write(net::buffer(mensaje));
-                    logger.log("Broadcast enviado a " + nombre);
+                    logger.log("Mensaje enviado a " + nombre);
                 } catch (const std::exception& e) {
                     logger.log("Error al enviar mensaje a " + nombre + ": " + e.what());
     
                     usuario->estado = EstadoUsuario::DESCONECTADO;
+                    clientes_a_eliminar.push_back(nombre);
+    
                     try {
                         usuario->ws_stream->close(websocket::close_code::normal);
-                    } catch (...) {}
+                    } catch (...) {
+                        logger.log("Error cerrando conexión de " + nombre);
+                    }
                 }
             }
+        }
+    
+        for (const std::string& nombre : clientes_a_eliminar) {
+            usuarios.erase(nombre);
+            logger.log("🗑️ Cliente eliminado de la lista: " + nombre);
         }
     }
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
