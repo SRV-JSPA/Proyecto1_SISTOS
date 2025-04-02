@@ -285,7 +285,7 @@ public:
         return usuarios;
     }
 
-    void ChatServer::broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
+    void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         
         std::string msgType = "desconocido";
@@ -439,7 +439,7 @@ public:
         enviar_mensaje_a_usuario(nombre_cliente, mensaje);
     }
 
-    void ChatServer::procesar_cambiar_estado(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
+    void procesar_cambiar_estado(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 3) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
             return;
