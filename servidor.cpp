@@ -380,21 +380,21 @@ public:
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
             return;
         }
-        
+    
         uint8_t len = datos[1];
         if (datos.size() < 2 + len + 1) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
             return;
         }
-        
+    
         std::string nombre_usuario(datos.begin() + 2, datos.begin() + 2 + len);
         uint8_t estado = datos[2 + len];
-        
+    
         if (estado > 3) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_INVALID_STATUS));
             return;
         }
-        
+    
         logger.log("Cliente " + nombre_cliente + " solicita cambiar estado de " + 
                    nombre_usuario + " a " + std::to_string(estado));
     
@@ -402,7 +402,7 @@ public:
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_USER_NOT_FOUND));
             return;
         }
-        
+    
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         auto it = usuarios.find(nombre_usuario);
         if (it == usuarios.end() || it->second->estado == EstadoUsuario::DESCONECTADO) {
@@ -413,35 +413,19 @@ public:
         EstadoUsuario estadoAnterior = it->second->estado;
         it->second->estado = static_cast<EstadoUsuario>(estado);
         it->second->actualizar_actividad();
-        
-        if (it->second->estado == EstadoUsuario::ACTIVO && 
-            (estadoAnterior == EstadoUsuario::OCUPADO || estadoAnterior == EstadoUsuario::INACTIVO)) {
-            logger.log("Usuario " + nombre_usuario + " cambió de " + std::to_string(static_cast<int>(estadoAnterior)) + 
-                     " a ACTIVO - verificando WebSocket");
-            
-            if (it->second->ws_stream && it->second->ws_stream->is_open()) {
-                try {
-                    beast::flat_buffer buffer;
-                    std::vector<uint8_t> echo_msg = {99}; 
-                    it->second->ws_stream->write(net::buffer(echo_msg));
-                    logger.log("Conexión de WebSocket verificada para " + nombre_usuario);
-                } catch(const std::exception& e) {
-                    logger.log("Error verificando WebSocket para " + nombre_usuario + ": " + e.what());
-                    
-                    try {
-                        it->second->ws_stream->close(websocket::close_code::normal);
-                    } catch(...) {}
-                    
-                    it->second->estado = EstadoUsuario::DESCONECTADO;
-                    logger.log("Usuario " + nombre_usuario + " marcado como DESCONECTADO debido a WebSocket inválido");
-                }
-            }
-        }
-        
+    
+        logger.log("Usuario " + nombre_usuario + " cambió de " + 
+                   std::to_string(static_cast<int>(estadoAnterior)) + " a " + 
+                   std::to_string(static_cast<int>(it->second->estado)));
+    
         auto mensaje = crear_mensaje_cambio_estado(nombre_usuario, it->second->estado);
+        logger.log("PREPARANDO BROADCAST: Cambio de estado de usuario " + nombre_usuario + 
+            " de " + std::to_string(static_cast<int>(estadoAnterior)) + 
+            " a " + std::to_string(static_cast<int>(it->second->estado)));
         broadcast_mensaje(mensaje);
-    }
+        logger.log("BROADCAST COMPLETADO: Notificación de cambio de estado enviada a todos los usuarios conectados");
 
+    }
     void procesar_enviar_mensaje(const std::string& nombre_cliente, const std::vector<uint8_t>& datos) {
         if (datos.size() < 2) {
             enviar_mensaje_a_usuario(nombre_cliente, crear_mensaje_error(ERROR_EMPTY_MESSAGE));
