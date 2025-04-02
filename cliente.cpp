@@ -942,6 +942,13 @@ void ChatFrame::ProcessUserInfoMessage(const std::vector<uint8_t>& data) {
     
     EstadoUsuario status = static_cast<EstadoUsuario>(data[2 + userLen]);
     
+    if (2 + userLen + 2 > data.size()) return;
+    
+    uint8_t ipLen = data[2 + userLen + 1];
+    if (2 + userLen + 2 + ipLen > data.size()) return;
+    
+    std::string ipAddress(data.begin() + 2 + userLen + 2, data.begin() + 2 + userLen + 2 + ipLen);
+    
     std::string statusStr;
     switch (status) {
         case EstadoUsuario::ACTIVO: statusStr = "Activo"; break;
@@ -950,11 +957,12 @@ void ChatFrame::ProcessUserInfoMessage(const std::vector<uint8_t>& data) {
         case EstadoUsuario::DESCONECTADO: statusStr = "Desconectado"; break;
     }
     
-    wxGetApp().CallAfter([username, statusStr]() {
+    wxGetApp().CallAfter([username, statusStr, ipAddress]() {
         wxString info = wxString::Format(
             "Información del usuario %s:\n"
-            "Estado: %s",
-            username, statusStr
+            "Estado: %s\n"
+            "Dirección IP: %s",
+            username, statusStr, ipAddress
         );
         
         wxMessageBox(info, "Información de Usuario", wxOK | wxICON_INFORMATION);
