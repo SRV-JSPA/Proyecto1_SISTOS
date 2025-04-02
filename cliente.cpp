@@ -108,8 +108,7 @@ private:
     bool forceCanSend_;
 
     std::unordered_map<std::string, ContactInfo> contacts_;
-    std::unordered_map<std::string, std::vector<std::string>> chatHistory_;
-    
+    std::unordered_map<std::string, std::vector<std::pair<std::string, bool>>> chatHistory_;    
     void RequestUserList();
     void LoadChatHistory();
     void RequestChatHistory();
@@ -458,6 +457,19 @@ void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
     chatTitle->SetLabel(titleText);
 
     chatBox->Clear();
+    
+    {
+        std::lock_guard<std::mutex> lock(chatHistoryMutex_);
+        auto it = chatHistory_.find(chatPartner_);
+        if (it != chatHistory_.end()) {
+            for (const auto& [msg, mostrar] : it->second) {
+                if (mostrar) {
+                    chatBox->AppendText(msg + "\n");
+                }
+            }
+        }
+    }
+    
     LoadChatHistory();
 }
 
@@ -567,6 +579,20 @@ void ChatFrame::OnChangeStatus(wxCommandEvent&) {
             newStatus = EstadoUsuario::ACTIVO; 
             canSendMessages_ = true;
             break;
+    }
+
+    if (newStatus == EstadoUsuario::ACTIVO) {
+        std::lock_guard<std::mutex> lock(chatHistoryMutex_);
+        
+        if (!chatPartner_.empty()) {
+            auto it = chatHistory_.find(chatPartner_);
+            if (it != chatHistory_.end()) {
+                chatBox->Clear();
+                for (const auto& [msg, _] : it->second) {
+                    chatBox->AppendText(msg + "\n");
+                }
+            }
+        }
     }
     
     currentStatus_ = newStatus;
@@ -922,11 +948,17 @@ void ChatFrame::ProcessMessageMessage(const std::vector<uint8_t>& data) {
         } else {
             chatKey = (chatPartner_ == "~") ? "~" : origin;
         }
+
+        bool mostrarMensaje = (currentStatus_ == EstadoUsuario::ACTIVO ||
+                               currentStatus_ == EstadoUsuario::INACTIVO);
         
-        chatHistory_[chatKey].push_back(formatted);
+        chatHistory_[chatKey].push_back({formatted, mostrarMensaje});
     }
 
-    if ((chatPartner_ == "~" || origin == chatPartner_) && origin != usuario_) {
+    if ((chatPartner_ == "~" || origin == chatPartner_) && 
+        origin != usuario_ && 
+        (currentStatus_ == EstadoUsuario::ACTIVO || 
+         currentStatus_ == EstadoUsuario::INACTIVO)) {
         wxGetApp().CallAfter([this, formatted]() {
             chatBox->AppendText(formatted + "\n");
         });
@@ -940,6 +972,7 @@ void ChatFrame::ProcessHistoryMessage(const std::vector<uint8_t>& data) {
     size_t offset = 2;
     
     std::vector<std::string> messages;
+    std::vector<std::pair<std::string, bool>> historicalMessages;
     
     for (uint8_t i = 0; i < numMessages; i++) {
         if (offset >= data.size()) break;
@@ -959,12 +992,20 @@ void ChatFrame::ProcessHistoryMessage(const std::vector<uint8_t>& data) {
         offset += msgLen;
 
         std::string formatted = username + ": " + message;
-        messages.push_back(formatted);
+        
+        bool mostrarMensaje = (currentStatus_ == EstadoUsuario::ACTIVO ||
+                               currentStatus_ == EstadoUsuario::INACTIVO);
+        
+        historicalMessages.push_back({formatted, mostrarMensaje});
+        
+        if (mostrarMensaje) {
+            messages.push_back(formatted);
+        }
     }
     
     {
         std::lock_guard<std::mutex> lock(chatHistoryMutex_);
-        chatHistory_[chatPartner_] = messages;
+        chatHistory_[chatPartner_] = historicalMessages;
     }
     
     wxGetApp().CallAfter([this, messages]() {
