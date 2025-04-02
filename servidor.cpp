@@ -287,82 +287,26 @@ public:
 
     void broadcast_mensaje(const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
-        
-        std::string msgType = "desconocido";
-        if (!mensaje.empty()) {
-            switch (mensaje[0]) {
-                case SERVER_ERROR: msgType = "ERROR"; break;
-                case SERVER_LIST_USERS: msgType = "LIST_USERS"; break;
-                case SERVER_USER_INFO: msgType = "USER_INFO"; break;
-                case SERVER_NEW_USER: msgType = "NEW_USER"; break;
-                case SERVER_STATUS_CHANGE: msgType = "STATUS_CHANGE"; break;
-                case SERVER_MESSAGE: msgType = "MESSAGE"; break;
-                case SERVER_HISTORY: msgType = "HISTORY"; break;
-                default: msgType = "UNKNOWN(" + std::to_string(mensaje[0]) + ")"; break;
-            }
-        }
-        
-        logger.log("BROADCAST INICIANDO: Tipo=" + msgType + ", Enviando a " + 
-                  std::to_string(usuarios.size()) + " usuarios");
-        
-        if (!mensaje.empty() && mensaje[0] == SERVER_STATUS_CHANGE) {
-            std::stringstream ss;
-            ss << "Contenido del mensaje de cambio de estado: [";
-            for (size_t i = 0; i < mensaje.size(); i++) {
-                ss << static_cast<int>(mensaje[i]);
-                if (i < mensaje.size() - 1) ss << ", ";
-            }
-            ss << "]";
-            logger.log(ss.str());
-        }
-        
-        int success_count = 0;
-        int skipped_count = 0;
-        int error_count = 0;
-        
         for (auto& [nombre, usuario] : usuarios) {
-            if (usuario->estado == EstadoUsuario::DESCONECTADO) {
-                skipped_count++;
-                continue;
-            }
-            
-            if (!usuario->ws_stream || !usuario->ws_stream->is_open()) {
-                logger.log("BROADCAST SKIP: Usuario " + nombre + " - WebSocket no válido o cerrado");
-                skipped_count++;
-                continue;
-            }
-            
-            try {
-                usuario->ws_stream->next_layer().expires_after(std::chrono::seconds(2));
-                usuario->ws_stream->write(net::buffer(mensaje));
-                success_count++;
-                logger.log("BROADCAST ÉXITO: Mensaje enviado a " + nombre);
-            } catch (const std::exception& e) {
-                error_count++;
-                logger.log("BROADCAST ERROR: Error enviando a " + nombre + ": " + e.what());
-                
-                usuario->estado = EstadoUsuario::DESCONECTADO;
-                logger.log("Usuario " + nombre + " marcado como DESCONECTADO tras error de comunicación");
-                
+            if (usuario->estado != EstadoUsuario::DESCONECTADO) {
                 try {
-                    std::vector<uint8_t> disco_msg = crear_mensaje_cambio_estado(nombre, EstadoUsuario::DESCONECTADO);
-                    for (auto& [other_name, other_user] : usuarios) {
-                        if (other_name != nombre && other_user->estado != EstadoUsuario::DESCONECTADO && 
-                            other_user->ws_stream && other_user->ws_stream->is_open()) {
-                            other_user->ws_stream->write(net::buffer(disco_msg));
-                        }
-                    }
-                } catch (...) {
-                    logger.log("Error notificando desconexión de " + nombre);
+                    usuario->ws_stream->set_option(
+                        websocket::stream_base::timeout::suggested(beast::role_type::server)
+                    );
+    
+                    usuario->ws_stream->write(net::buffer(mensaje));
+                    logger.log("Broadcast enviado a " + nombre);
+                } catch (const std::exception& e) {
+                    logger.log("Error al enviar mensaje a " + nombre + ": " + e.what());
+    
+                    usuario->estado = EstadoUsuario::DESCONECTADO;
+                    try {
+                        usuario->ws_stream->close(websocket::close_code::normal);
+                    } catch (...) {}
                 }
             }
         }
-        
-        logger.log("BROADCAST COMPLETADO: Tipo=" + msgType + 
-                  ", Éxito=" + std::to_string(success_count) + 
-                  ", Saltados=" + std::to_string(skipped_count) + 
-                  ", Errores=" + std::to_string(error_count));
-    }
+    } 
     bool enviar_mensaje_a_usuario(const std::string& nombre_usuario, const std::vector<uint8_t>& mensaje) {
         std::lock_guard<std::mutex> lock(usuarios_mutex);
         auto it = usuarios.find(nombre_usuario);
