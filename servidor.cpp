@@ -222,16 +222,18 @@ private:
 
         if (chat == "~") {
             std::lock_guard<std::mutex> lock(chat_general_mutex);
-
+        
             size_t count = std::min(chat_general.size(), size_t(255));
             historial.reserve(count);
             
             if (!chat_general.empty()) {
                 auto it = chat_general.end() - std::min(chat_general.size(), size_t(count));
                 for (size_t i = 0; i < std::min(chat_general.size(), size_t(count)); i++) {
-                    historial.push_back(std::make_shared<Mensaje>(*it++));
+                    auto msg_original = *it++;
+                    historial.push_back(std::make_shared<Mensaje>("Anónimo", msg_original.destino, msg_original.contenido));
                 }
             }
+        }
         } else {
             std::lock_guard<std::mutex> lock(usuarios_mutex);
             
@@ -500,7 +502,10 @@ public:
                 }
             }
             
-            broadcast_mensaje(mensaje_respuesta);
+            auto mensaje_anonimo = crear_mensaje_recibido("Anónimo", contenido);
+            
+            broadcast_mensaje(mensaje_anonimo);
+        }
         } else {
             bool enviado = false;
             {
