@@ -120,12 +120,14 @@ private:
     void OnCheckUserInfo(wxCommandEvent&);
     void OnRefreshUsers(wxCommandEvent&);
     void OnChangeStatus(wxCommandEvent&);
+    void MonitorearInactividad();
 
     std::vector<uint8_t> CreateListUsersMessage();
     std::vector<uint8_t> CreateGetUserMessage(const std::string& username);
     std::vector<uint8_t> CreateChangeStatusMessage(EstadoUsuario status);
     std::vector<uint8_t> CreateSendMessageMessage(const std::string& dest, const std::string& message);
     std::vector<uint8_t> CreateGetHistoryMessage(const std::string& chat);
+    std::chrono::steady_clock::time_point ultimaActividad_;
 
     void ProcessErrorMessage(const std::vector<uint8_t>& data);
     void ProcessListUsersMessage(const std::vector<uint8_t>& data);
@@ -225,8 +227,7 @@ ChatFrame::ChatFrame(std::shared_ptr<websocket::stream<tcp::socket>> ws, const s
 
     StartReceivingMessages();
     RequestUserList();
-
-
+    MonitorearInactividad();
     UpdateContactListUI();
     
 
@@ -274,6 +275,30 @@ bool ChatFrame::CanSendMessage() const {
     return currentStatus_ == EstadoUsuario::ACTIVO || currentStatus_ == EstadoUsuario::INACTIVO;
 }
 
+void ChatFrame::MonitorearInactividad() {
+    std::thread([this]() {
+        while (running_) {
+            std::this_thread::sleep_for(std::chrono::seconds(20));
+
+            auto tiempoActual = std::chrono::steady_clock::now();
+            auto ultimaActividadTranscurrido = std::chrono::duration_cast<std::chrono::seconds>(
+                tiempoActual - ultimaActividad_
+            ).count();
+            
+            if (ultimaActividadTranscurrido >= 20 && 
+                currentStatus_ == EstadoUsuario::ACTIVO) {
+
+                wxGetApp().CallAfter([this]() {
+                    statusChoice->SetSelection(2);  
+                    
+                    wxCommandEvent fakeEvent(wxEVT_CHOICE, statusChoice->GetId());
+                    OnChangeStatus(fakeEvent);
+                });
+            }
+        }
+    }).detach();
+}
+
 bool ChatFrame::IsWebSocketConnected() {
     if (!ws_) return false;
     
@@ -285,6 +310,7 @@ bool ChatFrame::IsWebSocketConnected() {
 }
 
 void ChatFrame::OnSend(wxCommandEvent&) {
+    ultimaActividad_ = std::chrono::steady_clock::now();
     if (chatPartner_.empty()) {
         wxMessageBox("Seleccione un contacto primero", "Aviso", wxOK | wxICON_INFORMATION);
         return;
@@ -417,6 +443,7 @@ void ChatFrame::OnAddContact(wxCommandEvent&) {
 }
 
 void ChatFrame::OnSelectContact(wxCommandEvent& evt) {
+    ultimaActividad_ = std::chrono::steady_clock::now();
     wxString selectedItem = contactList->GetString(evt.GetSelection());
     wxString contactName = selectedItem.AfterFirst(']').Trim(true).Trim(false);
 
@@ -519,6 +546,7 @@ void ChatFrame::UpdateStatusDisplay() {
 
 
 void ChatFrame::OnChangeStatus(wxCommandEvent&) {
+    ultimaActividad_ = std::chrono::steady_clock::now();
     int selection = statusChoice->GetSelection();
     EstadoUsuario newStatus;
     
